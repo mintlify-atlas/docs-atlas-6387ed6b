@@ -1,0 +1,108 @@
+---
+title: Health Check
+description: Service health monitoring endpoint
+---
+
+## GET /health
+
+Check the health status of the Codex-LB service.
+
+### Endpoint
+
+```
+GET /health
+```
+
+### Authentication
+
+No authentication required. This endpoint is publicly accessible.
+
+### Response
+
+<ResponseField name="status" type="string" required>
+  Service health status. Always returns `"ok"` when the service is running.
+</ResponseField>
+
+### Example Request
+
+```bash cURL
+curl http://localhost:2455/health
+```
+
+```javascript JavaScript
+const response = await fetch('http://localhost:2455/health');
+const data = await response.json();
+console.log(data.status);
+```
+
+```python Python
+import requests
+
+response = requests.get('http://localhost:2455/health')
+print(response.json())
+```
+
+### Example Response
+
+```json
+{
+  "status": "ok"
+}
+```
+
+## Use Cases
+
+### Docker Health Checks
+
+Use in Docker Compose or Kubernetes health checks:
+
+```yaml docker-compose.yml
+services:
+  codex-lb:
+    image: ghcr.io/soju06/codex-lb:latest
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:2455/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+```
+
+### Load Balancer Health Checks
+
+Configure your reverse proxy or load balancer to ping `/health` for availability checks:
+
+```nginx nginx.conf
+upstream codex_lb {
+    server localhost:2455;
+    # Health check configuration
+}
+```
+
+### Monitoring Scripts
+
+```bash
+#!/bin/bash
+if curl -f http://localhost:2455/health > /dev/null 2>&1; then
+    echo "Service is healthy"
+else
+    echo "Service is down"
+    # Send alert
+fi
+```
+
+## Status Codes
+
+| Status Code | Description |
+|-------------|-------------|
+| 200 | Service is healthy and operational |
+| 502/503 | Service is not responding (network/infrastructure issue) |
+
+<Note>
+The health endpoint does not check database connectivity or upstream API availability. It only confirms that the FastAPI application is running and able to serve requests.
+</Note>
+
+## Related
+
+- [Deployment → Docker](/deployment/docker) - Configure health checks in Docker
+- [Deployment → Production](/deployment/production) - Set up monitoring and alerts

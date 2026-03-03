@@ -1,0 +1,269 @@
+---
+title: Dashboard Data
+description: Endpoints for dashboard UI data
+---
+
+## Overview
+
+The Dashboard API provides aggregated data for the web dashboard UI. All endpoints require dashboard authentication.
+
+<Note>
+These endpoints are used by the Codex-LB web interface. They return data optimized for dashboard display.
+</Note>
+
+## GET /api/dashboard/overview
+
+Get dashboard overview statistics including account counts, usage summary, and recent activity.
+
+### Authentication
+
+Requires valid dashboard session cookie.
+
+### Response
+
+<ResponseField name="accountCounts" type="object">
+  Account statistics by status
+  
+  <Expandable title="properties">
+    <ResponseField name="total" type="integer">
+      Total number of accounts
+    </ResponseField>
+    
+    <ResponseField name="active" type="integer">
+      Number of active accounts
+    </ResponseField>
+    
+    <ResponseField name="paused" type="integer">
+      Number of paused accounts
+    </ResponseField>
+    
+    <ResponseField name="rateLimited" type="integer">
+      Number of rate-limited accounts
+    </ResponseField>
+    
+    <ResponseField name="quotaExceeded" type="integer">
+      Number of quota-exceeded accounts
+    </ResponseField>
+    
+    <ResponseField name="deactivated" type="integer">
+      Number of deactivated accounts
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="usageSummary" type="object">
+  Usage statistics for the current billing period
+  
+  <Expandable title="properties">
+    <ResponseField name="totalTokens" type="integer">
+      Total tokens used across all accounts
+    </ResponseField>
+    
+    <ResponseField name="totalCost" type="number">
+      Total cost in USD
+    </ResponseField>
+    
+    <ResponseField name="inputTokens" type="integer">
+      Total input tokens
+    </ResponseField>
+    
+    <ResponseField name="outputTokens" type="integer">
+      Total output tokens
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="requestCount" type="integer">
+  Total number of proxy requests in the last 24 hours
+</ResponseField>
+
+<ResponseField name="errorRate" type="number">
+  Percentage of failed requests (0-100)
+</ResponseField>
+
+### Example Request
+
+```bash cURL
+curl http://localhost:2455/api/dashboard/overview \
+  -H "Cookie: dashboard_session=<session_id>"
+```
+
+```javascript JavaScript
+const response = await fetch('http://localhost:2455/api/dashboard/overview', {
+  credentials: 'include'
+});
+const data = await response.json();
+console.log(data.accountCounts);
+```
+
+```python Python
+import requests
+
+response = requests.get(
+    'http://localhost:2455/api/dashboard/overview',
+    cookies={'dashboard_session': session_id}
+)
+print(response.json())
+```
+
+### Example Response
+
+```json
+{
+  "accountCounts": {
+    "total": 5,
+    "active": 3,
+    "paused": 1,
+    "rateLimited": 0,
+    "quotaExceeded": 1,
+    "deactivated": 0
+  },
+  "usageSummary": {
+    "totalTokens": 125000,
+    "totalCost": 2.45,
+    "inputTokens": 75000,
+    "outputTokens": 50000
+  },
+  "requestCount": 342,
+  "errorRate": 2.3
+}
+```
+
+## GET /api/models
+
+Get a simplified list of available models for dashboard display.
+
+<Note>
+This endpoint returns a simplified model list. For full model metadata including capabilities and rate limits, use `/v1/models` or `/backend-api/codex/models`.
+</Note>
+
+### Authentication
+
+Requires valid dashboard session cookie.
+
+### Response
+
+<ResponseField name="models" type="array">
+  Array of available models
+  
+  <Expandable title="model object">
+    <ResponseField name="id" type="string">
+      Model identifier (e.g., `"gpt-5.3-codex"`)
+    </ResponseField>
+    
+    <ResponseField name="name" type="string">
+      Human-readable model name (e.g., `"GPT-5.3 Codex"`)
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+### Example Request
+
+```bash cURL
+curl http://localhost:2455/api/models \
+  -H "Cookie: dashboard_session=<session_id>"
+```
+
+### Example Response
+
+```json
+{
+  "models": [
+    {
+      "id": "gpt-5.3-codex",
+      "name": "GPT-5.3 Codex"
+    },
+    {
+      "id": "gpt-5.3-codex-spark",
+      "name": "GPT-5.3 Codex Spark"
+    },
+    {
+      "id": "gpt-4o-mini",
+      "name": "GPT-4o Mini"
+    },
+    {
+      "id": "o3-pro",
+      "name": "o3 Pro"
+    }
+  ]
+}
+```
+
+## Use Cases
+
+### Dashboard Home Page
+
+Display key metrics on the dashboard landing page:
+
+```typescript
+const DashboardHome = () => {
+  const [overview, setOverview] = useState(null);
+  
+  useEffect(() => {
+    fetch('/api/dashboard/overview', { credentials: 'include' })
+      .then(res => res.json())
+      .then(data => setOverview(data));
+  }, []);
+  
+  if (!overview) return <Loading />;
+  
+  return (
+    <div>
+      <h1>Dashboard Overview</h1>
+      <MetricCard 
+        title="Active Accounts" 
+        value={overview.accountCounts.active} 
+        total={overview.accountCounts.total} 
+      />
+      <MetricCard 
+        title="Total Tokens (24h)" 
+        value={overview.usageSummary.totalTokens.toLocaleString()} 
+      />
+      <MetricCard 
+        title="Total Cost (24h)" 
+        value={`$${overview.usageSummary.totalCost.toFixed(2)}`} 
+      />
+    </div>
+  );
+};
+```
+
+### Model Selection Dropdown
+
+Populate a model selector in API key creation forms:
+
+```typescript
+const ModelSelector = () => {
+  const [models, setModels] = useState([]);
+  
+  useEffect(() => {
+    fetch('/api/models', { credentials: 'include' })
+      .then(res => res.json())
+      .then(data => setModels(data.models));
+  }, []);
+  
+  return (
+    <select name="allowedModels" multiple>
+      {models.map(model => (
+        <option key={model.id} value={model.id}>
+          {model.name}
+        </option>
+      ))}
+    </select>
+  );
+};
+```
+
+## Error Codes
+
+| Code | Status | Description |
+|------|--------|-------------|
+| `authentication_required` | 401 | Dashboard session invalid or expired |
+| `totp_required` | 401 | TOTP verification needed (if enabled) |
+
+## Related
+
+- [Dashboard Auth](/api/dashboard-auth) - Authentication for dashboard endpoints
+- [Accounts](/api/accounts) - Detailed account management
+- [Usage](/api/usage) - Detailed usage statistics
+- [Models](/api/models) - Full model metadata endpoint

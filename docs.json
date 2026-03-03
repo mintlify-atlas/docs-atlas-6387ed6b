@@ -116,7 +116,11 @@
               "api/settings",
               "api/usage",
               "api/firewall",
-              "api/request-logs"
+              "api/request-logs",
+              "api/oauth",
+              "api/dashboard-auth",
+              "api/dashboard",
+              "api/health"
             ]
           }
         ]

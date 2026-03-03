@@ -1,11 +1,11 @@
 ---
 title: 'Account Management'
-description: 'Manage Claude accounts for load balancing and pooling'
+description: 'Manage ChatGPT accounts for load balancing and pooling'
 ---
 
 ## Overview
 
-The Account Management API allows you to manage Claude accounts used by Codex-LB for load balancing. You can import accounts, list them with usage statistics, pause/reactivate accounts, and view usage trends.
+The Account Management API allows you to manage ChatGPT accounts used by Codex-LB for load balancing. You can import accounts, list them with usage statistics, pause/reactivate accounts, and view usage trends.
 
 <Note>
   All Account Management endpoints require dashboard authentication via session cookie.
@@ -36,7 +36,7 @@ The Account Management API allows you to manage Claude accounts used by Codex-LB
     </ResponseField>
     
     <ResponseField name="plan_type" type="string" required>
-      Claude plan type (e.g., "pro", "team")
+      ChatGPT plan type (e.g., "pro", "team")
     </ResponseField>
     
     <ResponseField name="status" type="string" required>
@@ -155,13 +155,13 @@ curl -X GET "https://your-instance.com/api/accounts" \
 ## Import Account
 
 <ParamField path="POST /api/accounts/import" type="endpoint">
-  Import a Claude account using an auth.json file from the official Claude CLI.
+  Import a ChatGPT account using an auth.json file from the official OpenAI CLI.
 </ParamField>
 
 ### Request
 
 <ParamField body="auth_json" type="file" required>
-  The auth.json file containing Claude session tokens. Must be uploaded as `multipart/form-data`.
+  The auth.json file containing ChatGPT session tokens. Must be uploaded as `multipart/form-data`.
 </ParamField>
 
 ### Response
@@ -175,7 +175,7 @@ curl -X GET "https://your-instance.com/api/accounts" \
 </ResponseField>
 
 <ResponseField name="plan_type" type="string" required>
-  Claude plan type
+  ChatGPT plan type
 </ResponseField>
 
 <ResponseField name="status" type="string" required>
