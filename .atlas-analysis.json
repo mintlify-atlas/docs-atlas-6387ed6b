@@ -1,0 +1,151 @@
+{
+  "projectType": "api-service",
+  "projectName": "Codex-LB",
+  "projectDescription": "Load balancer and proxy for ChatGPT accounts with usage tracking, API key management, and OpenAI-compatible endpoints",
+  "theme": "aspen",
+  "primaryColor": "#2563eb",
+  "lightColor": "#3b82f6",
+  "darkColor": "#1e40af",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "installation"
+            ]
+          },
+          {
+            "group": "Core Features",
+            "pages": [
+              "features/account-pooling",
+              "features/load-balancing",
+              "features/usage-tracking",
+              "features/api-keys",
+              "features/dashboard-auth"
+            ]
+          },
+          {
+            "group": "Client Setup",
+            "pages": [
+              "clients/overview",
+              "clients/codex-cli",
+              "clients/opencode",
+              "clients/openclaw",
+              "clients/openai-sdk"
+            ]
+          },
+          {
+            "group": "Configuration",
+            "pages": [
+              "configuration/environment-variables",
+              "configuration/database",
+              "configuration/oauth",
+              "configuration/firewall"
+            ]
+          },
+          {
+            "group": "Deployment",
+            "pages": [
+              "deployment/docker",
+              "deployment/local",
+              "deployment/production"
+            ]
+          },
+          {
+            "group": "Guides",
+            "pages": [
+              "guides/adding-accounts",
+              "guides/managing-api-keys",
+              "guides/rate-limiting",
+              "guides/model-routing",
+              "guides/troubleshooting"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Overview",
+            "pages": [
+              "api/overview",
+              "api/authentication",
+              "api/error-handling"
+            ]
+          },
+          {
+            "group": "OpenAI-Compatible Endpoints",
+            "pages": [
+              "api/chat-completions",
+              "api/responses",
+              "api/models",
+              "api/audio-transcriptions"
+            ]
+          },
+          {
+            "group": "Codex Endpoints",
+            "pages": [
+              "api/codex-responses",
+              "api/codex-models",
+              "api/codex-usage"
+            ]
+          },
+          {
+            "group": "Management API",
+            "pages": [
+              "api/accounts",
+              "api/api-keys-management",
+              "api/settings",
+              "api/usage",
+              "api/firewall",
+              "api/request-logs"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Account pooling and load balancing across multiple ChatGPT accounts",
+    "OpenAI-compatible proxy endpoints (/v1/* and /backend-api/codex/*)",
+    "API key management with rate limits (token, cost, model-based)",
+    "Usage tracking with 28-day trends and per-account metrics",
+    "Dashboard authentication with password and optional TOTP",
+    "Dynamic model registry with automatic upstream sync",
+    "OAuth token refresh automation",
+    "IP-based firewall rules",
+    "Audio transcription compatibility",
+    "Web dashboard for management and monitoring"
+  ],
+  "publicApiSurface": [
+    "POST /v1/chat/completions",
+    "POST /v1/responses",
+    "GET /v1/models",
+    "POST /v1/audio/transcriptions",
+    "POST /backend-api/codex/responses",
+    "POST /backend-api/codex/responses/compact",
+    "GET /backend-api/codex/models",
+    "POST /backend-api/transcribe",
+    "GET /api/codex/usage",
+    "GET /api/accounts",
+    "POST /api/accounts",
+    "PATCH /api/accounts/{id}",
+    "DELETE /api/accounts/{id}",
+    "GET /api/api-keys",
+    "POST /api/api-keys",
+    "PATCH /api/api-keys/{id}",
+    "DELETE /api/api-keys/{id}",
+    "POST /api/api-keys/{id}/regenerate",
+    "GET /api/settings",
+    "PUT /api/settings",
+    "GET /api/firewall/rules",
+    "POST /api/firewall/rules",
+    "DELETE /api/firewall/rules/{id}"
+  ]
+}
