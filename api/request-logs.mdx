@@ -1,0 +1,488 @@
+---
+title: 'Request Logs'
+description: 'Query and filter historical proxy request logs'
+---
+
+## Overview
+
+The Request Logs API provides access to historical records of all proxy requests, including request metadata, status codes, token usage, costs, and errors. Use this API to debug issues, analyze usage patterns, and monitor system health.
+
+<Note>
+  All Request Logs endpoints require dashboard authentication via session cookie.
+</Note>
+
+## List Request Logs
+
+<ParamField path="GET /api/request-logs" type="endpoint">
+  Retrieve paginated request logs with optional filtering by account, model, status, and time range.
+</ParamField>
+
+### Query Parameters
+
+<ParamField query="limit" type="integer" default="50">
+  Number of logs to return (1-1000)
+</ParamField>
+
+<ParamField query="offset" type="integer" default="0">
+  Number of logs to skip for pagination
+</ParamField>
+
+<ParamField query="search" type="string">
+  Search term to filter logs (searches in error messages and request IDs)
+</ParamField>
+
+<ParamField query="accountId" type="array">
+  Filter by account ID(s). Can be specified multiple times for multiple accounts.
+</ParamField>
+
+<ParamField query="status" type="array">
+  Filter by status code(s). Can be specified multiple times.
+</ParamField>
+
+<ParamField query="model" type="array">
+  Filter by model name(s). Can be specified multiple times.
+</ParamField>
+
+<ParamField query="reasoningEffort" type="array">
+  Filter by reasoning effort level(s). Can be specified multiple times.
+</ParamField>
+
+<ParamField query="modelOption" type="array">
+  Filter by model+reasoning combinations. Format: `model:::reasoning_effort`
+</ParamField>
+
+<ParamField query="since" type="string">
+  ISO 8601 timestamp - only include logs after this time
+</ParamField>
+
+<ParamField query="until" type="string">
+  ISO 8601 timestamp - only include logs before this time
+</ParamField>
+
+### Response
+
+<ResponseField name="requests" type="array" required>
+  Array of request log entries
+  
+  <Expandable title="RequestLogEntry">
+    <ResponseField name="requested_at" type="string" required>
+      ISO 8601 timestamp when request was made
+    </ResponseField>
+    
+    <ResponseField name="account_id" type="string" required>
+      Account ID that handled the request
+    </ResponseField>
+    
+    <ResponseField name="request_id" type="string" required>
+      Unique request identifier
+    </ResponseField>
+    
+    <ResponseField name="model" type="string" required>
+      Model used for the request
+    </ResponseField>
+    
+    <ResponseField name="status" type="string" required>
+      HTTP status code or error type (e.g., "200", "429", "error")
+    </ResponseField>
+    
+    <ResponseField name="error_code" type="string">
+      Error code if request failed (e.g., "overloaded_error", "rate_limit_error")
+    </ResponseField>
+    
+    <ResponseField name="error_message" type="string">
+      Human-readable error message if request failed
+    </ResponseField>
+    
+    <ResponseField name="tokens" type="integer">
+      Total tokens (input + output)
+    </ResponseField>
+    
+    <ResponseField name="cached_input_tokens" type="integer">
+      Number of input tokens served from cache
+    </ResponseField>
+    
+    <ResponseField name="reasoning_effort" type="string">
+      Reasoning effort level (e.g., "low", "medium", "high")
+    </ResponseField>
+    
+    <ResponseField name="cost_usd" type="number">
+      Estimated cost in USD
+    </ResponseField>
+    
+    <ResponseField name="latency_ms" type="integer">
+      Request latency in milliseconds
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="total" type="integer" required>
+  Total number of logs matching filters (before pagination)
+</ResponseField>
+
+<ResponseField name="has_more" type="boolean" required>
+  Whether there are more logs beyond the current page
+</ResponseField>
+
+### Example Request - Basic
+
+```bash
+curl -X GET "https://your-instance.com/api/request-logs?limit=10" \
+  -H "Cookie: dashboard_session=your-session-token"
+```
+
+### Example Request - Filtered
+
+```bash
+curl -X GET "https://your-instance.com/api/request-logs?limit=50&status=200&model=claude-opus-4-20250514&since=2026-03-03T00:00:00Z" \
+  -H "Cookie: dashboard_session=your-session-token"
+```
+
+### Example Request - Multiple Filters
+
+```bash
+curl -X GET "https://your-instance.com/api/request-logs?accountId=acc_123&accountId=acc_456&status=429&status=error" \
+  -H "Cookie: dashboard_session=your-session-token"
+```
+
+### Example Response
+
+```json
+{
+  "requests": [
+    {
+      "requested_at": "2026-03-03T19:45:23Z",
+      "account_id": "acc_123abc",
+      "request_id": "req_xyz789",
+      "model": "claude-opus-4-20250514",
+      "status": "200",
+      "error_code": null,
+      "error_message": null,
+      "tokens": 2450,
+      "cached_input_tokens": 1200,
+      "reasoning_effort": "medium",
+      "cost_usd": 0.0245,
+      "latency_ms": 3420
+    },
+    {
+      "requested_at": "2026-03-03T19:44:15Z",
+      "account_id": "acc_456def",
+      "request_id": "req_abc123",
+      "model": "claude-sonnet-4-20250514",
+      "status": "429",
+      "error_code": "rate_limit_error",
+      "error_message": "Account rate limit exceeded",
+      "tokens": null,
+      "cached_input_tokens": null,
+      "reasoning_effort": null,
+      "cost_usd": null,
+      "latency_ms": 125
+    }
+  ],
+  "total": 15420,
+  "has_more": true
+}
+```
+
+## Get Filter Options
+
+<ParamField path="GET /api/request-logs/options" type="endpoint">
+  Retrieve available filter values based on current logs and optional pre-filters.
+</ParamField>
+
+### Query Parameters
+
+Accepts the same filter parameters as the main list endpoint:
+- `status`
+- `accountId`
+- `model`
+- `reasoningEffort`
+- `modelOption`
+- `since`
+- `until`
+
+<Info>
+  Use this endpoint to build dynamic filter UIs. Apply existing filters to get context-aware options for additional filters.
+</Info>
+
+### Response
+
+<ResponseField name="account_ids" type="array" required>
+  List of account IDs that have logs matching the current filters
+</ResponseField>
+
+<ResponseField name="model_options" type="array" required>
+  List of model+reasoning combinations available
+  
+  <Expandable title="RequestLogModelOption">
+    <ResponseField name="model" type="string">Model name</ResponseField>
+    <ResponseField name="reasoning_effort" type="string">Reasoning effort level (if applicable)</ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="statuses" type="array" required>
+  List of status values present in matching logs
+</ResponseField>
+
+### Example Request
+
+```bash
+curl -X GET "https://your-instance.com/api/request-logs/options?since=2026-03-03T00:00:00Z" \
+  -H "Cookie: dashboard_session=your-session-token"
+```
+
+### Example Response
+
+```json
+{
+  "account_ids": [
+    "acc_123abc",
+    "acc_456def",
+    "acc_789ghi"
+  ],
+  "model_options": [
+    {
+      "model": "claude-opus-4-20250514",
+      "reasoning_effort": "medium"
+    },
+    {
+      "model": "claude-opus-4-20250514",
+      "reasoning_effort": "high"
+    },
+    {
+      "model": "claude-sonnet-4-20250514",
+      "reasoning_effort": null
+    },
+    {
+      "model": "gpt-4o-transcribe",
+      "reasoning_effort": null
+    }
+  ],
+  "statuses": [
+    "200",
+    "429",
+    "500",
+    "error"
+  ]
+}
+```
+
+## Filtering Examples
+
+### By Time Range
+
+View requests from the last hour:
+
+```bash
+curl "https://your-instance.com/api/request-logs?since=2026-03-03T19:00:00Z&until=2026-03-03T20:00:00Z"
+```
+
+### By Account
+
+View all requests for a specific account:
+
+```bash
+curl "https://your-instance.com/api/request-logs?accountId=acc_123abc"
+```
+
+### By Status
+
+Find all failed requests:
+
+```bash
+curl "https://your-instance.com/api/request-logs?status=429&status=500&status=error"
+```
+
+### By Model
+
+Filter to Opus requests only:
+
+```bash
+curl "https://your-instance.com/api/request-logs?model=claude-opus-4-20250514"
+```
+
+### By Model + Reasoning Effort
+
+Find high reasoning effort Opus requests:
+
+```bash
+curl "https://your-instance.com/api/request-logs?modelOption=claude-opus-4-20250514:::high"
+```
+
+### Search by Text
+
+Search for specific error messages:
+
+```bash
+curl "https://your-instance.com/api/request-logs?search=overloaded"
+```
+
+### Combined Filters
+
+Find expensive failed Opus requests in the last 24 hours:
+
+```bash
+curl "https://your-instance.com/api/request-logs?model=claude-opus-4-20250514&status=error&since=2026-03-02T20:00:00Z&limit=100"
+```
+
+## Pagination
+
+The API uses offset-based pagination:
+
+```bash
+# First page (logs 0-49)
+curl "https://your-instance.com/api/request-logs?limit=50&offset=0"
+
+# Second page (logs 50-99)
+curl "https://your-instance.com/api/request-logs?limit=50&offset=50"
+
+# Third page (logs 100-149)
+curl "https://your-instance.com/api/request-logs?limit=50&offset=100"
+```
+
+Check the `has_more` field to determine if additional pages exist:
+
+```javascript
+if (response.has_more) {
+  // Fetch next page with offset += limit
+}
+```
+
+## Status Codes
+
+Common status values in logs:
+
+| Status | Description |
+|--------|-------------|
+| `200` | Successful request |
+| `400` | Bad request (client error) |
+| `401` | Authentication failed |
+| `403` | Forbidden (e.g., model not allowed, IP blocked) |
+| `429` | Rate limit exceeded |
+| `500` | Internal server error |
+| `502` | Bad gateway (upstream API error) |
+| `error` | Generic error (see error_code for details) |
+
+## Error Codes
+
+Common error_code values:
+
+| Error Code | Description |
+|------------|-------------|
+| `overloaded_error` | Claude API is overloaded |
+| `rate_limit_error` | Account quota exceeded |
+| `invalid_request_error` | Malformed request |
+| `authentication_error` | Invalid or expired credentials |
+| `model_not_allowed` | API key doesn't have access to this model |
+| `ip_forbidden` | Client IP not in firewall allowlist |
+
+## Token and Cost Tracking
+
+### Token Fields
+
+- **tokens**: Total tokens (input + output). Null for failed requests.
+- **cached_input_tokens**: Prompt cache hits. Reduces cost but still counted in usage.
+
+### Cost Calculation
+
+Costs are estimated based on:
+1. Model pricing (per 1M tokens)
+2. Input/output token split
+3. Cached token discount
+4. Reasoning effort multiplier (if applicable)
+
+The `cost_usd` field shows the calculated cost for the request. Sum this field to analyze spending patterns.
+
+## Use Cases
+
+<CardGroup cols={2}>
+  <Card title="Debugging" icon="bug">
+    Search for specific request IDs or error messages to diagnose issues.
+  </Card>
+  
+  <Card title="Cost Analysis" icon="chart-pie">
+    Filter by model and time range to understand spending by model type.
+  </Card>
+  
+  <Card title="Performance Monitoring" icon="gauge">
+    Track latency_ms across different models and accounts.
+  </Card>
+  
+  <Card title="Usage Patterns" icon="chart-line">
+    Identify peak usage times and model preferences.
+  </Card>
+</CardGroup>
+
+## Performance Considerations
+
+### Index Optimization
+
+The following queries are optimized with database indexes:
+- Time range filtering (`since`, `until`)
+- Account ID lookups
+- Status filtering
+- Model filtering
+
+### Large Result Sets
+
+For querying large date ranges:
+1. Use smaller `limit` values (50-100)
+2. Implement cursor-based pagination
+3. Consider exporting data for offline analysis
+
+### Real-time Monitoring
+
+For live dashboards, poll with a small time window:
+
+```bash
+# Last 5 minutes, poll every 30 seconds
+curl "https://your-instance.com/api/request-logs?since=2026-03-03T19:55:00Z&limit=100"
+```
+
+## Authentication
+
+All request log endpoints require dashboard authentication via session cookie.
+
+## Common Patterns
+
+### Error Rate Dashboard
+
+Calculate error percentage over the last hour:
+
+```javascript
+const all = await fetch('/api/request-logs?since=' + oneHourAgo + '&limit=1000');
+const errors = await fetch('/api/request-logs?since=' + oneHourAgo + '&status=error&status=429&status=500&limit=1000');
+
+const errorRate = (errors.total / all.total) * 100;
+```
+
+### Cost Per Model Report
+
+Sum costs by model:
+
+```javascript
+const models = ['claude-opus-4-20250514', 'claude-sonnet-4-20250514'];
+const costs = {};
+
+for (const model of models) {
+  const logs = await fetchAllPages(`/api/request-logs?model=${model}&since=${startDate}`);
+  costs[model] = logs.reduce((sum, log) => sum + (log.cost_usd || 0), 0);
+}
+```
+
+### Account Health Check
+
+Find accounts with high error rates:
+
+```javascript
+const accounts = await fetch('/api/request-logs/options').then(r => r.json());
+
+for (const accountId of accounts.account_ids) {
+  const total = await fetch(`/api/request-logs?accountId=${accountId}&limit=1`).then(r => r.json());
+  const errors = await fetch(`/api/request-logs?accountId=${accountId}&status=error&limit=1`).then(r => r.json());
+  
+  const errorRate = (errors.total / total.total) * 100;
+  if (errorRate > 10) {
+    console.warn(`Account ${accountId} has ${errorRate.toFixed(1)}% error rate`);
+  }
+}
+```

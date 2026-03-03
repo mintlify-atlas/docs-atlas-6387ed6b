@@ -1,0 +1,458 @@
+---
+title: 'Managing API Keys'
+description: 'Create and manage API keys for authenticating requests to Codex-LB'
+icon: 'key'
+---
+
+API keys provide secure authentication for applications and services accessing your Codex-LB instance. Each API key can have custom limits, model restrictions, and expiration dates.
+
+## Creating an API Key
+
+<Steps>
+  <Step title="Navigate to API Keys">
+    In the Codex-LB dashboard, go to the API Keys section.
+    
+  </Step>
+
+  <Step title="Configure Key Settings">
+    Click "Create API Key" and configure:
+    
+    **Basic Settings**
+    - **Name**: A descriptive name for the key (e.g., "Production App", "Development", "QA Testing")
+    - **Allowed Models**: Optional list of models this key can access (leave empty for all models)
+    - **Expiration**: Optional expiration date for automatic key rotation
+    
+    **Rate Limits** (Optional)
+    
+    See [Rate Limiting](/guides/rate-limiting) for detailed configuration options.
+  </Step>
+
+  <Step title="Copy the API Key">
+    After creation, the full API key will be displayed **once**. Copy and store it securely.
+    
+    ```bash
+    sk-clb-AbCdEfGhIjKlMnOpQrStUvWxYz0123456789
+    ```
+    
+    <Warning>
+      This is the only time the full key will be shown. If you lose it, you'll need to regenerate the key.
+    </Warning>
+  </Step>
+
+  <Step title="Use the API Key">
+    Include the API key in your requests using the `Authorization` header:
+    
+    ```bash
+    curl https://your-codex-lb-instance.com/v1/chat/completions \
+      -H "Authorization: Bearer sk-clb-AbCdEfGhIjKlMnOpQrStUvWxYz0123456789" \
+      -H "Content-Type: application/json" \
+      -d '{
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": "Hello!"}]
+      }'
+    ```
+  </Step>
+</Steps>
+
+## API Key Properties
+
+### Name
+
+A human-readable identifier for the key. Use descriptive names to easily identify keys:
+
+- `production-web-app`
+- `mobile-app-ios`
+- `staging-environment`
+- `team-dev-testing`
+
+### Key Format
+
+All Codex-LB API keys follow the format:
+
+```
+sk-clb-{32-character-token}
+```
+
+- **Prefix**: `sk-clb-` identifies the key as a Codex-LB API key
+- **Token**: 32-character URL-safe random string
+- **Storage**: Keys are hashed using SHA-256 before storage
+
+### Key Prefix
+
+The dashboard displays only the first 15 characters of each key for identification:
+
+```
+sk-clb-AbCdEfG...
+```
+
+This allows you to identify keys without exposing the full token.
+
+### Allowed Models
+
+Restrict which models an API key can access:
+
+```json
+{
+  "name": "Limited Key",
+  "allowed_models": ["gpt-4", "gpt-4-turbo", "o1-preview"]
+}
+```
+
+- Leave empty or `null` to allow all models
+- Requests for non-allowed models will return `403 Forbidden`
+- Model names must match exactly (case-sensitive)
+
+### Expiration
+
+Set an expiration date for automatic key rotation:
+
+```json
+{
+  "name": "Temporary Key",
+  "expires_at": "2026-12-31T23:59:59Z"
+}
+```
+
+- Expired keys return `401 Unauthorized`
+- Set to `null` for keys that never expire
+- Use expiration for temporary access or security policies requiring rotation
+
+### Active Status
+
+Keys can be enabled or disabled:
+
+- **Active** (`is_active: true`): Key can authenticate requests
+- **Inactive** (`is_active: false`): Key is disabled and returns `401 Unauthorized`
+
+Use this for temporary suspension without deleting the key.
+
+## Managing Existing Keys
+
+### Viewing API Keys
+
+The API keys list shows:
+
+- Key name
+- Key prefix (first 15 characters)
+- Active status
+- Allowed models (if configured)
+- Expiration date (if set)
+- Created date
+- Last used timestamp
+- Current usage for each limit
+
+
+### Updating an API Key
+
+You can update most key properties:
+
+<Steps>
+  <Step title="Select the Key">
+    Click on the key you want to modify in the API Keys list.
+  </Step>
+
+  <Step title="Edit Properties">
+    Modify any of the following:
+    
+    - Name
+    - Allowed models
+    - Expiration date
+    - Active status
+    - Rate limits (add, remove, or modify)
+  </Step>
+
+  <Step title="Save Changes">
+    Click "Save" to apply changes. The key itself (token) remains unchanged.
+  </Step>
+</Steps>
+
+**Note**: You cannot change the actual key token. To change the token, you must regenerate the key.
+
+### Regenerating an API Key
+
+Regenerate a key to create a new token while keeping the same configuration:
+
+<Steps>
+  <Step title="Select the Key">
+    Navigate to the key you want to regenerate.
+  </Step>
+
+  <Step title="Regenerate">
+    Click "Regenerate" and confirm the action.
+    
+    <Warning>
+      The old key will stop working immediately. Update all applications using the old key.
+    </Warning>
+  </Step>
+
+  <Step title="Copy New Key">
+    Copy the new API key and update your applications.
+    
+    The key configuration (name, limits, expiration) remains the same, but a new token is generated.
+  </Step>
+</Steps>
+
+### Deactivating an API Key
+
+Temporarily disable a key without deleting it:
+
+```json
+{
+  "is_active": false
+}
+```
+
+Use cases:
+- Investigating suspicious activity
+- Temporarily revoking access
+- Compliance requirements
+- Testing fallback behavior
+
+Reactivate by setting `is_active: true`.
+
+### Deleting an API Key
+
+Permanently remove an API key:
+
+<Steps>
+  <Step title="Select the Key">
+    Navigate to the key you want to delete.
+  </Step>
+
+  <Step title="Delete">
+    Click "Delete" and confirm the action.
+    
+    <Warning>
+      This action is permanent and cannot be undone. The key will immediately stop working.
+    </Warning>
+  </Step>
+
+  <Step title="Update Applications">
+    Update any applications using the deleted key with a new API key.
+  </Step>
+</Steps>
+
+## Rate Limits
+
+API keys support granular rate limiting. See the [Rate Limiting](/guides/rate-limiting) guide for detailed information.
+
+### Limit Types
+
+- **Total Tokens**: Combined input and output tokens
+- **Input Tokens**: Prompt tokens only
+- **Output Tokens**: Completion tokens only
+- **Cost (USD)**: Total cost in microdollars
+
+### Limit Windows
+
+- **Daily**: Resets every 24 hours
+- **Weekly**: Resets every 7 days
+- **Monthly**: Resets every 30 days
+
+### Model-Specific Limits
+
+Apply different limits for different models:
+
+```json
+{
+  "limits": [
+    {
+      "limit_type": "cost_usd",
+      "limit_window": "daily",
+      "max_value": 10000000,
+      "model_filter": "gpt-4"
+    },
+    {
+      "limit_type": "cost_usd",
+      "limit_window": "daily",
+      "max_value": 5000000,
+      "model_filter": "gpt-4-turbo"
+    }
+  ]
+}
+```
+
+## Usage Tracking
+
+### Real-Time Usage
+
+Each API key displays current usage for all configured limits:
+
+```json
+{
+  "limits": [
+    {
+      "limit_type": "total_tokens",
+      "limit_window": "daily",
+      "max_value": 1000000,
+      "current_value": 245680,
+      "reset_at": "2026-03-04T00:00:00Z"
+    }
+  ]
+}
+```
+
+### Last Used Timestamp
+
+Track when each key was last used:
+
+- `last_used_at`: Timestamp of the most recent successful request
+- Updated asynchronously after request completion
+- Useful for identifying unused keys
+
+### Resetting Usage
+
+Manually reset usage counters:
+
+```json
+{
+  "reset_usage": true
+}
+```
+
+This sets all `current_value` fields to `0` and updates `reset_at` timestamps.
+
+## Authentication Flow
+
+When a request arrives with an API key:
+
+<Steps>
+  <Step title="Extract Key">
+    Codex-LB extracts the API key from the `Authorization: Bearer {key}` header.
+  </Step>
+
+  <Step title="Validate Key">
+    The key is hashed and looked up in the database:
+    
+    - Check if key exists
+    - Check if key is active (`is_active: true`)
+    - Check if key has expired (`expires_at > now`)
+    - Check if requested model is allowed
+  </Step>
+
+  <Step title="Check Rate Limits">
+    For each configured limit:
+    
+    1. Check if limit applies to the requested model
+    2. Check if current usage is below max value
+    3. Reserve usage quota for the request
+    4. Update `last_used_at` timestamp
+  </Step>
+
+  <Step title="Process Request">
+    If all checks pass, the request is forwarded to the upstream ChatGPT API.
+    
+    After the request completes, actual token usage is calculated and limits are updated.
+  </Step>
+</Steps>
+
+## Error Responses
+
+### Invalid API Key
+
+```json
+{
+  "error": {
+    "code": "invalid_api_key",
+    "message": "Invalid API key",
+    "type": "invalid_request_error"
+  }
+}
+```
+
+**HTTP Status**: `401 Unauthorized`
+
+**Causes**:
+- Key doesn't exist
+- Key is inactive
+- Key has expired
+- Invalid key format
+
+### Model Not Allowed
+
+```json
+{
+  "error": {
+    "code": "model_not_allowed",
+    "message": "Model 'gpt-4' is not allowed for this API key",
+    "type": "invalid_request_error"
+  }
+}
+```
+
+**HTTP Status**: `403 Forbidden`
+
+**Cause**: Requested model not in `allowed_models` list.
+
+### Rate Limit Exceeded
+
+```json
+{
+  "error": {
+    "code": "rate_limit_exceeded",
+    "message": "API key total_tokens daily limit exceeded",
+    "type": "rate_limit_error",
+    "reset_at": "2026-03-04T00:00:00Z"
+  }
+}
+```
+
+**HTTP Status**: `429 Too Many Requests`
+
+**Headers**:
+```
+X-RateLimit-Limit-Total-Tokens-Daily: 1000000
+X-RateLimit-Remaining-Total-Tokens-Daily: 0
+X-RateLimit-Reset-Total-Tokens-Daily: 1709539200
+```
+
+See [Rate Limiting](/guides/rate-limiting) for more details.
+
+## Security Best Practices
+
+<Warning>
+  Treat API keys like passwords. Never commit them to source control or share them publicly.
+</Warning>
+
+### Key Management
+
+- **Rotate keys regularly**: Set expiration dates and rotate before they expire
+- **Use environment variables**: Store keys in environment variables, not in code
+- **Separate keys per environment**: Use different keys for dev, staging, and production
+- **Monitor usage**: Review `last_used_at` to identify unused or compromised keys
+- **Revoke compromised keys**: Immediately delete or deactivate any exposed keys
+
+### Access Control
+
+- **Principle of least privilege**: Grant minimum necessary access (models, limits)
+- **Model restrictions**: Limit expensive models to production keys only
+- **Rate limits**: Set appropriate limits based on expected usage
+- **Expiration dates**: Use temporary keys for contractors or testing
+
+### Monitoring
+
+- Review API key usage regularly
+- Set up alerts for unusual activity
+- Track rate limit violations
+- Monitor last used timestamps for stale keys
+
+## API Reference
+
+For programmatic API key management:
+
+- [Create API Key](/api-reference/endpoint/create-api-key)
+- [List API Keys](/api-reference/endpoint/list-api-keys)
+- [Update API Key](/api-reference/endpoint/update-api-key)
+- [Delete API Key](/api-reference/endpoint/delete-api-key)
+- [Regenerate API Key](/api-reference/endpoint/regenerate-api-key)
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Rate Limiting" icon="gauge" href="/guides/rate-limiting">
+    Configure detailed rate limits for your API keys
+  </Card>
+  <Card title="Model Routing" icon="route" href="/guides/model-routing">
+    Control how requests are routed to ChatGPT accounts
+  </Card>
+</CardGroup>

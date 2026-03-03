@@ -1,0 +1,361 @@
+---
+title: 'Firewall Rules'
+description: 'Manage IP allowlist for proxy endpoint access control'
+---
+
+## Overview
+
+The Firewall API allows you to manage an IP allowlist for restricting access to proxy endpoints. When the allowlist is active (contains at least one IP), only requests from listed IPs can access the proxy routes.
+
+<Note>
+  Dashboard endpoints (`/api/*`) are never restricted by the firewall. Only proxy endpoints are affected.
+</Note>
+
+## Protected Endpoints
+
+The firewall protects these proxy-facing paths:
+- `/v1/*` - OpenAI-compatible API endpoints
+- `/backend-api/codex/*` - Codex-specific endpoints
+- `/backend-api/transcribe` - Audio transcription endpoint
+
+Dashboard and management endpoints remain accessible regardless of firewall rules.
+
+## List Firewall IPs
+
+<ParamField path="GET /api/firewall/ips" type="endpoint">
+  Retrieve the current firewall mode and all allowed IP addresses.
+</ParamField>
+
+### Response
+
+<ResponseField name="mode" type="string" required>
+  Current firewall mode:
+  - `allow_all`: Allowlist is empty, all IPs are permitted
+  - `allowlist_active`: Allowlist is active, only listed IPs are permitted
+</ResponseField>
+
+<ResponseField name="entries" type="array" required>
+  Array of allowed IP addresses
+  
+  <Expandable title="FirewallIpEntry">
+    <ResponseField name="ip_address" type="string">IP address (IPv4 or IPv6)</ResponseField>
+    <ResponseField name="created_at" type="string">ISO 8601 timestamp when added</ResponseField>
+  </Expandable>
+</ResponseField>
+
+### Example Request
+
+```bash
+curl -X GET "https://your-instance.com/api/firewall/ips" \
+  -H "Cookie: dashboard_session=your-session-token"
+```
+
+### Example Response - Allow All Mode
+
+```json
+{
+  "mode": "allow_all",
+  "entries": []
+}
+```
+
+### Example Response - Allowlist Active
+
+```json
+{
+  "mode": "allowlist_active",
+  "entries": [
+    {
+      "ip_address": "203.0.113.45",
+      "created_at": "2026-03-03T14:30:00Z"
+    },
+    {
+      "ip_address": "198.51.100.0",
+      "created_at": "2026-03-03T15:00:00Z"
+    },
+    {
+      "ip_address": "2001:db8::1",
+      "created_at": "2026-03-03T16:00:00Z"
+    }
+  ]
+}
+```
+
+## Add IP to Allowlist
+
+<ParamField path="POST /api/firewall/ips" type="endpoint">
+  Add an IP address to the allowlist. The firewall automatically activates when the first IP is added.
+</ParamField>
+
+### Request Body
+
+<ParamField body="ip_address" type="string" required>
+  IP address to allow (IPv4 or IPv6 format)
+</ParamField>
+
+### Response
+
+Returns the created firewall entry.
+
+<ResponseField name="ip_address" type="string" required>
+  The normalized IP address
+</ResponseField>
+
+<ResponseField name="created_at" type="string" required>
+  Timestamp when the IP was added
+</ResponseField>
+
+### Example Request - IPv4
+
+```bash
+curl -X POST "https://your-instance.com/api/firewall/ips" \
+  -H "Cookie: dashboard_session=your-session-token" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "ip_address": "203.0.113.45"
+  }'
+```
+
+### Example Request - IPv6
+
+```bash
+curl -X POST "https://your-instance.com/api/firewall/ips" \
+  -H "Cookie: dashboard_session=your-session-token" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "ip_address": "2001:db8::1"
+  }'
+```
+
+### Example Response
+
+```json
+{
+  "ip_address": "203.0.113.45",
+  "created_at": "2026-03-03T19:45:00Z"
+}
+```
+
+### Error Responses
+
+<ResponseField name="400" type="error">
+  **invalid_ip**: The provided IP address format is invalid
+</ResponseField>
+
+<ResponseField name="409" type="error">
+  **ip_exists**: This IP address is already in the allowlist
+</ResponseField>
+
+## Remove IP from Allowlist
+
+<ParamField path="DELETE /api/firewall/ips/{ip_address}" type="endpoint">
+  Remove an IP address from the allowlist. When the last IP is removed, the firewall returns to `allow_all` mode.
+</ParamField>
+
+### Path Parameters
+
+<ParamField path="ip_address" type="string" required>
+  The IP address to remove (URL-encoded if necessary)
+</ParamField>
+
+### Response
+
+<ResponseField name="status" type="string" required>
+  Always returns "deleted" on success
+</ResponseField>
+
+### Example Request
+
+```bash
+curl -X DELETE "https://your-instance.com/api/firewall/ips/203.0.113.45" \
+  -H "Cookie: dashboard_session=your-session-token"
+```
+
+### Example Request - IPv6 (URL-encoded)
+
+```bash
+curl -X DELETE "https://your-instance.com/api/firewall/ips/2001%3Adb8%3A%3A1" \
+  -H "Cookie: dashboard_session=your-session-token"
+```
+
+### Example Response
+
+```json
+{
+  "status": "deleted"
+}
+```
+
+### Error Responses
+
+<ResponseField name="400" type="error">
+  **invalid_ip**: The provided IP address format is invalid
+</ResponseField>
+
+<ResponseField name="404" type="error">
+  **ip_not_found**: The specified IP address is not in the allowlist
+</ResponseField>
+
+## Firewall Behavior
+
+### Allow All Mode (Default)
+
+When the allowlist is empty:
+- `mode: "allow_all"`
+- All client IPs can access proxy endpoints
+- Dashboard endpoints remain accessible
+- No IP validation is performed
+
+### Allowlist Active Mode
+
+When one or more IPs are in the allowlist:
+- `mode: "allowlist_active"`
+- Only listed IPs can access proxy endpoints
+- Unlisted IPs receive 403 Forbidden
+- Dashboard endpoints remain accessible from any IP
+
+### Blocked Request Response
+
+When a request from an unlisted IP is blocked:
+
+```json
+{
+  "error": {
+    "code": "ip_forbidden",
+    "message": "Your IP address is not allowed to access this endpoint",
+    "type": "permission_error"
+  }
+}
+```
+
+HTTP Status: 403 Forbidden
+
+## Trusted Proxy Configuration
+
+<Info>
+  If Codex-LB is behind a reverse proxy (nginx, Cloudflare, etc.), configure trusted proxy headers to ensure correct IP resolution.
+</Info>
+
+### Environment Variables
+
+```bash
+# Enable proxy header trust
+FIREWALL_TRUST_PROXY_HEADERS=true
+
+# Define trusted proxy CIDR ranges
+FIREWALL_TRUSTED_PROXY_CIDRS=10.0.0.0/8,172.16.0.0/12,192.168.0.0/16
+```
+
+### Header Resolution Logic
+
+When `FIREWALL_TRUST_PROXY_HEADERS=true`:
+
+1. Check if request source IP matches a trusted CIDR
+2. If trusted, extract client IP from `X-Forwarded-For` header (first valid IP)
+3. If untrusted or header missing, use source socket IP
+
+### Example Scenarios
+
+<Tabs>
+  <Tab title="Direct Connection">
+    ```
+    Client (203.0.113.45) → Codex-LB
+    
+    Firewall sees: 203.0.113.45
+    ```
+  </Tab>
+  
+  <Tab title="Trusted Proxy">
+    ```
+    Client (203.0.113.45) → nginx (10.0.0.5) → Codex-LB
+    X-Forwarded-For: 203.0.113.45
+    
+    10.0.0.5 matches trusted CIDR 10.0.0.0/8
+    Firewall sees: 203.0.113.45 (from header)
+    ```
+  </Tab>
+  
+  <Tab title="Untrusted Proxy">
+    ```
+    Client (203.0.113.45) → untrusted proxy (1.2.3.4) → Codex-LB
+    X-Forwarded-For: 203.0.113.45
+    
+    1.2.3.4 does not match any trusted CIDR
+    Firewall sees: 1.2.3.4 (header ignored)
+    ```
+  </Tab>
+</Tabs>
+
+<Warning>
+  Never enable `FIREWALL_TRUST_PROXY_HEADERS` without properly configuring `FIREWALL_TRUSTED_PROXY_CIDRS`. An attacker could spoof the `X-Forwarded-For` header to bypass the allowlist.
+</Warning>
+
+## Use Cases
+
+<CardGroup cols={2}>
+  <Card title="Corporate Network" icon="building">
+    Restrict proxy access to your company's public IP ranges.
+  </Card>
+  
+  <Card title="CI/CD Pipeline" icon="gears">
+    Allow only your build servers to access the API for automated testing.
+  </Card>
+  
+  <Card title="Development" icon="code">
+    Permit specific developer IPs during initial deployment.
+  </Card>
+  
+  <Card title="Partner Access" icon="handshake">
+    Grant proxy access to trusted partner organizations' IP ranges.
+  </Card>
+</CardGroup>
+
+## Best Practices
+
+### 1. Start with Dashboard-Only Access
+
+During initial setup:
+1. Add your admin IP to the allowlist
+2. Test dashboard access (should always work)
+3. Test proxy access from your IP (should work)
+4. Test proxy access from another IP (should be blocked)
+
+### 2. Use CIDR Notation
+
+For IP ranges, you can add individual IPs or configure your reverse proxy to handle CIDR ranges upstream.
+
+### 3. Monitor Blocked Requests
+
+Check request logs for `ip_forbidden` errors to identify legitimate users being blocked:
+
+```bash
+grep "ip_forbidden" /var/log/codex-lb/requests.log
+```
+
+### 4. Coordinate with Network Team
+
+Before enabling the firewall in production:
+- Document all allowed IP ranges
+- Get confirmation from network team on static IPs
+- Plan for IP changes (ISP reassignments, office moves)
+
+### 5. Emergency Access
+
+If you lock yourself out:
+1. SSH into the server
+2. Access the database directly
+3. Clear the `firewall_ips` table: `DELETE FROM firewall_ips;`
+4. The firewall returns to `allow_all` mode
+
+## Authentication
+
+All firewall management endpoints require dashboard authentication via session cookie. The firewall enforcement itself is separate from authentication - it operates at the network layer.
+
+## Common Error Codes
+
+| Code | Description |
+|------|-------------|
+| `invalid_ip` | IP address format validation failed |
+| `ip_exists` | Attempted to add a duplicate IP |
+| `ip_not_found` | Attempted to remove an IP that isn't in the allowlist |
+| `ip_forbidden` | Client IP not in allowlist (returned to blocked proxy requests) |

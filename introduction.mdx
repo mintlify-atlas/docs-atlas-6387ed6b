@@ -1,0 +1,123 @@
+---
+title: "Introduction"
+description: "Load balancer for ChatGPT accounts with usage tracking, dashboard, and OpenAI-compatible endpoints"
+---
+
+## Welcome to Codex-LB
+
+Codex-LB is a load balancer and proxy for ChatGPT accounts. Pool multiple accounts, track usage, manage API keys, and monitor everything through a beautiful dashboard.
+
+<img
+  src="/images/dashboard.jpg"
+  alt="Codex-LB Dashboard"
+  className="rounded-lg shadow-lg"
+/>
+
+## Why Codex-LB?
+
+Codex-LB sits between your applications and ChatGPT accounts, providing enterprise-grade account management and usage controls without requiring direct OpenAI API access.
+
+<CardGroup cols={2}>
+  <Card title="Account Pooling" icon="users">
+    Load balance requests across multiple ChatGPT accounts automatically
+  </Card>
+  <Card title="Usage Tracking" icon="chart-line">
+    Track tokens, costs, and 28-day trends per account with real-time updates
+  </Card>
+  <Card title="API Key Management" icon="key">
+    Create API keys with per-key rate limits by token, cost, time window, and model
+  </Card>
+  <Card title="Dashboard Auth" icon="lock">
+    Secure your dashboard with password authentication and optional TOTP
+  </Card>
+  <Card title="OpenAI Compatible" icon="plug">
+    Works with Codex CLI, OpenCode, and any OpenAI-compatible client
+  </Card>
+  <Card title="Auto Model Sync" icon="arrows-rotate">
+    Available models are automatically fetched from upstream ChatGPT
+  </Card>
+</CardGroup>
+
+## How It Works
+
+1. **Deploy** — Run Codex-LB via Docker or uvx
+2. **Add Accounts** — Link your ChatGPT accounts through OAuth
+3. **Configure Clients** — Point any OpenAI-compatible client at Codex-LB
+4. **Monitor** — Track usage and manage everything from the dashboard
+
+<Note>
+  Codex-LB proxies requests to your ChatGPT accounts, not to OpenAI's API. You'll need active ChatGPT accounts to use this service.
+</Note>
+
+## Key Features
+
+### Account Management
+
+Add multiple ChatGPT accounts and let Codex-LB distribute requests intelligently. Monitor each account's token usage, cost, and health status from a unified dashboard.
+
+### Usage Analytics
+
+Real-time tracking of:
+- Token consumption per account
+- Cost calculations with 28-day trends
+- Request logs with model and endpoint details
+- Per-key usage breakdowns
+
+### Rate Limiting
+
+Create API keys with fine-grained controls:
+- Token limits per day/week/month
+- Cost limits with currency tracking
+- Model restrictions
+- Automatic key expiration
+
+### Security
+
+- Optional API key authentication for all proxy endpoints
+- Dashboard authentication with password + TOTP
+- IP-based firewall rules
+- Encrypted token storage
+
+## Supported Clients
+
+Codex-LB works with any OpenAI-compatible client:
+
+<CardGroup cols={2}>
+  <Card title="Codex CLI" icon="terminal" href="/clients/codex-cli">
+    Configure your Codex CLI to use Codex-LB as the backend
+  </Card>
+  <Card title="OpenCode" icon="code" href="/clients/opencode">
+    Set up OpenCode with Codex-LB as a custom provider
+  </Card>
+  <Card title="OpenClaw" icon="paw" href="/clients/openclaw">
+    Add Codex-LB as a model provider in OpenClaw
+  </Card>
+  <Card title="OpenAI SDK" icon="python" href="/clients/openai-sdk">
+    Use the official OpenAI Python/Node SDK with Codex-LB
+  </Card>
+</CardGroup>
+
+## Quick Start
+
+Get up and running in under 2 minutes:
+
+<Card title="Quickstart Guide" icon="rocket" href="/quickstart" horizontal>
+  Follow our quickstart to install Codex-LB and make your first request
+</Card>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Installation" icon="download" href="/installation">
+    Detailed installation instructions for Docker, uvx, and local development
+  </Card>
+  <Card title="Add Accounts" icon="user-plus" href="/guides/adding-accounts">
+    Learn how to add and manage ChatGPT accounts
+  </Card>
+  <Card title="Client Setup" icon="plug" href="/clients/overview">
+    Configure your favorite OpenAI-compatible client
+  </Card>
+  <Card title="Configuration" icon="gear" href="/configuration/environment-variables">
+    Explore environment variables and advanced settings
+  </Card>
+</CardGroup>

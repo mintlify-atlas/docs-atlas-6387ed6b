@@ -1,0 +1,595 @@
+---
+title: 'Rate Limiting'
+description: 'Configure rate limits for API keys based on tokens, cost, and models'
+icon: 'gauge'
+---
+
+Codex-LB provides granular rate limiting for API keys, allowing you to control usage based on tokens, cost, time windows, and specific models.
+
+## Overview
+
+Rate limits help you:
+- **Control costs**: Cap spending per API key
+- **Prevent abuse**: Limit usage to expected patterns
+- **Manage resources**: Distribute quota across applications
+- **Enforce policies**: Implement organizational usage policies
+
+## Limit Types
+
+Codex-LB supports four types of rate limits:
+
+### Total Tokens
+
+Limits the combined number of input and output tokens.
+
+```json
+{
+  "limit_type": "total_tokens",
+  "limit_window": "daily",
+  "max_value": 1000000
+}
+```
+
+**Use case**: General usage caps based on token consumption.
+
+**Example**: Allow 1 million tokens per day across all requests.
+
+### Input Tokens
+
+Limits only the prompt (input) tokens.
+
+```json
+{
+  "limit_type": "input_tokens",
+  "limit_window": "weekly",
+  "max_value": 500000
+}
+```
+
+**Use case**: Control prompt size, especially for long-context models.
+
+**Example**: Limit prompts to 500k tokens per week to control context window usage.
+
+### Output Tokens
+
+Limits only the completion (output) tokens.
+
+```json
+{
+  "limit_type": "output_tokens",
+  "limit_window": "daily",
+  "max_value": 100000
+}
+```
+
+**Use case**: Control response length and generation costs.
+
+**Example**: Cap generated content to 100k tokens per day.
+
+### Cost (USD)
+
+Limits based on total cost in microdollars (1 USD = 1,000,000 microdollars).
+
+```json
+{
+  "limit_type": "cost_usd",
+  "limit_window": "monthly",
+  "max_value": 100000000
+}
+```
+
+**Use case**: Direct cost control and budget enforcement.
+
+**Example**: Cap monthly spending at $100 (100,000,000 microdollars).
+
+**Pricing**: Codex-LB uses built-in pricing for OpenAI models, including:
+- Standard input/output token pricing
+- Cached token discounts
+- Reasoning token pricing (for o1 models)
+
+## Limit Windows
+
+Rate limits can be applied over different time windows:
+
+### Daily
+
+Resets every 24 hours from the time the limit was created or last reset.
+
+```json
+{
+  "limit_window": "daily",
+  "reset_at": "2026-03-04T00:00:00Z"
+}
+```
+
+**Use case**: Daily usage quotas, per-day budgets.
+
+### Weekly
+
+Resets every 7 days from the time the limit was created or last reset.
+
+```json
+{
+  "limit_window": "weekly",
+  "reset_at": "2026-03-10T12:00:00Z"
+}
+```
+
+**Use case**: Weekly budgets, sprint-based quotas.
+
+### Monthly
+
+Resets every 30 days from the time the limit was created or last reset.
+
+```json
+{
+  "limit_window": "monthly",
+  "reset_at": "2026-04-03T12:00:00Z"
+}
+```
+
+**Use case**: Monthly billing cycles, subscription quotas.
+
+## Model-Specific Limits
+
+You can apply different limits to different models using the `model_filter` field:
+
+```json
+{
+  "limits": [
+    {
+      "limit_type": "cost_usd",
+      "limit_window": "daily",
+      "max_value": 50000000,
+      "model_filter": "gpt-4"
+    },
+    {
+      "limit_type": "cost_usd",
+      "limit_window": "daily",
+      "max_value": 20000000,
+      "model_filter": "gpt-4-turbo"
+    },
+    {
+      "limit_type": "cost_usd",
+      "limit_window": "daily",
+      "max_value": 10000000,
+      "model_filter": null
+    }
+  ]
+}
+```
+
+**Behavior**:
+- Limits with `model_filter: null` apply to all models
+- Limits with a specific model apply only to that model
+- Model names must match exactly (case-sensitive)
+- Multiple limits can exist for the same model
+
+**Example**: 
+- Requests to `gpt-4` are checked against the $50/day limit
+- Requests to `gpt-4-turbo` are checked against the $20/day limit
+- Requests to `gpt-3.5-turbo` are checked against the $10/day limit (global)
+
+## Combining Limits
+
+You can configure multiple limits for a single API key:
+
+```json
+{
+  "name": "Multi-Limit Key",
+  "limits": [
+    {
+      "limit_type": "total_tokens",
+      "limit_window": "daily",
+      "max_value": 1000000
+    },
+    {
+      "limit_type": "cost_usd",
+      "limit_window": "daily",
+      "max_value": 50000000
+    },
+    {
+      "limit_type": "cost_usd",
+      "limit_window": "monthly",
+      "max_value": 1000000000
+    }
+  ]
+}
+```
+
+**Enforcement**: ALL limits must be satisfied for a request to proceed.
+
+In this example:
+- Must not exceed 1M tokens per day
+- Must not exceed $50 per day
+- Must not exceed $1,000 per month
+
+## Creating Limits
+
+<Steps>
+  <Step title="Create or Edit API Key">
+    When creating or editing an API key, add limits in the "Rate Limits" section.
+  </Step>
+
+  <Step title="Configure Limit">
+    For each limit, specify:
+    
+    - **Limit Type**: `total_tokens`, `input_tokens`, `output_tokens`, or `cost_usd`
+    - **Limit Window**: `daily`, `weekly`, or `monthly`
+    - **Max Value**: The maximum allowed value
+    - **Model Filter** (optional): Specific model to apply this limit to
+  </Step>
+
+  <Step title="Save">
+    Save the API key. Limits take effect immediately.
+  </Step>
+</Steps>
+
+### Example Configurations
+
+#### Basic Daily Token Limit
+
+```json
+{
+  "name": "Dev App",
+  "limits": [
+    {
+      "limit_type": "total_tokens",
+      "limit_window": "daily",
+      "max_value": 500000
+    }
+  ]
+}
+```
+
+#### Cost-Based Budget
+
+```json
+{
+  "name": "Production API",
+  "limits": [
+    {
+      "limit_type": "cost_usd",
+      "limit_window": "daily",
+      "max_value": 100000000
+    },
+    {
+      "limit_type": "cost_usd",
+      "limit_window": "monthly",
+      "max_value": 2000000000
+    }
+  ]
+}
+```
+
+**Note**: $100/day max, $2,000/month max
+
+#### Model-Specific Limits
+
+```json
+{
+  "name": "Multi-Model Key",
+  "limits": [
+    {
+      "limit_type": "total_tokens",
+      "limit_window": "daily",
+      "max_value": 1000000,
+      "model_filter": "gpt-4"
+    },
+    {
+      "limit_type": "total_tokens",
+      "limit_window": "daily",
+      "max_value": 5000000,
+      "model_filter": "gpt-3.5-turbo"
+    }
+  ]
+}
+```
+
+#### Separate Input/Output Limits
+
+```json
+{
+  "name": "Constrained App",
+  "limits": [
+    {
+      "limit_type": "input_tokens",
+      "limit_window": "daily",
+      "max_value": 100000
+    },
+    {
+      "limit_type": "output_tokens",
+      "limit_window": "daily",
+      "max_value": 50000
+    }
+  ]
+}
+```
+
+## Usage Enforcement
+
+### Request Reservation
+
+When a request arrives, Codex-LB:
+
+<Steps>
+  <Step title="Check Applicable Limits">
+    Identify all limits that apply to the request:
+    
+    - Limits with `model_filter: null`
+    - Limits with `model_filter` matching the requested model
+  </Step>
+
+  <Step title="Reserve Quota">
+    For each applicable limit, reserve a portion of quota:
+    
+    - **Tokens**: Reserve 8,192 tokens (typical request size)
+    - **Cost**: Reserve $2 (2,000,000 microdollars) based on estimated pricing
+    
+    If any limit would be exceeded, the request is rejected with `429 Too Many Requests`.
+  </Step>
+
+  <Step title="Process Request">
+    Forward the request to the upstream ChatGPT API.
+  </Step>
+
+  <Step title="Finalize Usage">
+    After the response completes:
+    
+    - Calculate actual token usage (input + output + cached)
+    - Calculate actual cost based on model pricing
+    - Adjust reserved quota to match actual usage
+    - Update `current_value` for each limit
+  </Step>
+</Steps>
+
+### Automatic Reset
+
+Limits automatically reset when their time window expires:
+
+- `current_value` resets to `0`
+- `reset_at` advances by the window duration
+- Pending requests can proceed once limits reset
+
+**Reset times** are calculated from the limit creation time, not from midnight or calendar boundaries.
+
+### Manual Reset
+
+You can manually reset usage for an API key:
+
+```json
+{
+  "reset_usage": true
+}
+```
+
+This:
+- Sets all `current_value` fields to `0`
+- Updates `reset_at` to the next window boundary
+- Immediately allows new requests
+
+## Monitoring Limits
+
+### Current Usage
+
+View current usage in the dashboard for each limit:
+
+
+```json
+{
+  "id": 123,
+  "limit_type": "total_tokens",
+  "limit_window": "daily",
+  "max_value": 1000000,
+  "current_value": 245680,
+  "reset_at": "2026-03-04T00:00:00Z"
+}
+```
+
+**Progress**: 24.6% of daily quota used (245,680 / 1,000,000 tokens)
+
+### Rate Limit Headers
+
+All API responses include rate limit headers:
+
+```http
+X-RateLimit-Limit-Total-Tokens-Daily: 1000000
+X-RateLimit-Remaining-Total-Tokens-Daily: 754320
+X-RateLimit-Reset-Total-Tokens-Daily: 1709539200
+```
+
+**Header format**: `X-RateLimit-{Metric}-{LimitType}-{Window}`
+
+Metrics:
+- `Limit`: Maximum value for this limit
+- `Remaining`: Remaining quota before hitting the limit
+- `Reset`: Unix timestamp when the limit resets
+
+### Rate Limit Errors
+
+When a limit is exceeded:
+
+```json
+{
+  "error": {
+    "code": "rate_limit_exceeded",
+    "message": "API key total_tokens daily limit exceeded",
+    "type": "rate_limit_error"
+  }
+}
+```
+
+**HTTP Status**: `429 Too Many Requests`
+
+**Response Headers**:
+```http
+X-RateLimit-Limit-Total-Tokens-Daily: 1000000
+X-RateLimit-Remaining-Total-Tokens-Daily: 0
+X-RateLimit-Reset-Total-Tokens-Daily: 1709539200
+Retry-After: 43200
+```
+
+**Retry-After**: Seconds until the limit resets
+
+## Advanced Scenarios
+
+### Progressive Limits
+
+Combine daily, weekly, and monthly limits for progressive enforcement:
+
+```json
+{
+  "limits": [
+    {
+      "limit_type": "cost_usd",
+      "limit_window": "daily",
+      "max_value": 50000000
+    },
+    {
+      "limit_type": "cost_usd",
+      "limit_window": "weekly",
+      "max_value": 300000000
+    },
+    {
+      "limit_type": "cost_usd",
+      "limit_window": "monthly",
+      "max_value": 1000000000
+    }
+  ]
+}
+```
+
+**Effect**:
+- Can't spend more than $50/day
+- Can't spend more than $300/week (even if under daily limits)
+- Can't spend more than $1,000/month
+
+### Tiered Model Access
+
+Give different quotas to different model tiers:
+
+```json
+{
+  "limits": [
+    {
+      "limit_type": "total_tokens",
+      "limit_window": "daily",
+      "max_value": 100000,
+      "model_filter": "gpt-4"
+    },
+    {
+      "limit_type": "total_tokens",
+      "limit_window": "daily",
+      "max_value": 500000,
+      "model_filter": "gpt-4-turbo"
+    },
+    {
+      "limit_type": "total_tokens",
+      "limit_window": "daily",
+      "max_value": 2000000,
+      "model_filter": "gpt-3.5-turbo"
+    }
+  ]
+}
+```
+
+**Effect**: More expensive models have tighter limits.
+
+### Zero-Cost Testing
+
+Use token limits without cost limits for testing:
+
+```json
+{
+  "limits": [
+    {
+      "limit_type": "total_tokens",
+      "limit_window": "daily",
+      "max_value": 10000
+    }
+  ]
+}
+```
+
+**Use case**: Allow limited testing without worrying about costs.
+
+## Troubleshooting
+
+### Limits not enforcing
+
+**Cause**: Limit configuration error or no applicable limits for the model.
+
+**Solution**:
+1. Verify limit configuration in the dashboard
+2. Check that `model_filter` matches the requested model exactly
+3. Ensure at least one limit applies (either global or model-specific)
+
+### Usage higher than expected
+
+**Cause**: Cached tokens, reasoning tokens, or streaming overhead.
+
+**Solution**:
+1. Check `cached_input_tokens` in usage reports (cached tokens are cheaper but still counted)
+2. For o1 models, check `reasoning_tokens` (reasoning tokens cost more)
+3. Consider using `cost_usd` limits instead of token limits for accurate budget control
+
+### Limits resetting at wrong time
+
+**Cause**: Reset time is calculated from limit creation, not calendar boundaries.
+
+**Solution**:
+1. Check the `reset_at` timestamp in the limit details
+2. Manually reset the limit to align with desired time
+3. Recreate the limit at the desired start time
+
+### Rate limit exceeded but usage shows available quota
+
+**Cause**: Reserved quota from in-flight requests hasn't been finalized.
+
+**Solution**: Wait for in-flight requests to complete. Reserved quota is released or adjusted after responses complete.
+
+### Different limits for same model causing confusion
+
+**Cause**: Multiple limits with overlapping `model_filter` values.
+
+**Solution**: Be explicit with model filters:
+- Use `null` for global limits
+- Use specific model names for model-specific limits
+- Avoid duplicate limit type + window + model filter combinations
+
+## Best Practices
+
+<Tip>
+  Start with conservative limits and increase them based on actual usage patterns.
+</Tip>
+
+### Budget Control
+
+- **Use cost limits** for direct budget enforcement
+- **Combine daily and monthly** limits for progressive caps
+- **Set alerts** at 80% and 90% usage thresholds
+- **Review usage** weekly to adjust limits
+
+### Fair Usage
+
+- **Different keys for different apps** to isolate usage
+- **Separate dev/staging/prod** keys with appropriate limits
+- **Model-specific limits** to control expensive model usage
+- **Monitor last_used_at** to identify unused keys
+
+### Performance
+
+- **Token limits** are faster to calculate than cost limits
+- **Fewer limits** per key reduces overhead
+- **Global limits** (no model filter) are faster than model-specific limits
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Managing API Keys" icon="key" href="/guides/managing-api-keys">
+    Learn more about API key management
+  </Card>
+  <Card title="Model Routing" icon="route" href="/guides/model-routing">
+    Configure how requests are routed to accounts
+  </Card>
+</CardGroup>

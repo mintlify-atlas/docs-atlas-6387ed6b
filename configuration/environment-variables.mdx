@@ -1,0 +1,256 @@
+---
+title: Environment Variables
+description: Complete reference of all Codex-LB environment variables
+---
+
+Codex-LB is configured using environment variables with the `CODEX_LB_` prefix. You can set these in your shell, a `.env` file, or a `.env.local` file in the project root.
+
+## Configuration Files
+
+Codex-LB reads environment variables from:
+
+1. System environment variables
+2. `.env` file (tracked in git, shared defaults)
+3. `.env.local` file (gitignored, local overrides)
+
+The `.env.local` file takes precedence over `.env`, which takes precedence over system defaults.
+
+<Tip>
+For Docker deployments, use the `-e` flag or `--env-file` option to pass environment variables to the container.
+</Tip>
+
+## Database Configuration
+
+<ParamField path="CODEX_LB_DATABASE_URL" type="string" default="sqlite+aiosqlite:///~/.codex-lb/store.db">
+  Database connection URL. Supports SQLite and PostgreSQL.
+  
+  **SQLite** (default):
+  ```bash
+  CODEX_LB_DATABASE_URL=sqlite+aiosqlite:///~/.codex-lb/store.db
+  ```
+  
+  **PostgreSQL**:
+  ```bash
+  CODEX_LB_DATABASE_URL=postgresql+asyncpg://user:pass@localhost:5432/codex_lb
+  ```
+  
+  See [Database Configuration](/configuration/database) for detailed setup.
+</ParamField>
+
+<ParamField path="CODEX_LB_DATABASE_MIGRATE_ON_STARTUP" type="boolean" default="true">
+  Automatically run database migrations on startup. Recommended for most deployments.
+</ParamField>
+
+<ParamField path="CODEX_LB_DATABASE_SQLITE_PRE_MIGRATE_BACKUP_ENABLED" type="boolean" default="true">
+  Create a backup of the SQLite database before running migrations. Only applies to SQLite databases.
+</ParamField>
+
+<ParamField path="CODEX_LB_DATABASE_SQLITE_PRE_MIGRATE_BACKUP_MAX_FILES" type="integer" default="5">
+  Maximum number of SQLite backup files to retain. Older backups are automatically deleted.
+</ParamField>
+
+<ParamField path="CODEX_LB_DATABASE_POOL_SIZE" type="integer" default="15">
+  Maximum number of database connections in the connection pool. Only applies to PostgreSQL.
+</ParamField>
+
+<ParamField path="CODEX_LB_DATABASE_MAX_OVERFLOW" type="integer" default="10">
+  Maximum number of connections that can be created beyond pool_size. Only applies to PostgreSQL.
+</ParamField>
+
+<ParamField path="CODEX_LB_DATABASE_POOL_TIMEOUT_SECONDS" type="float" default="30.0">
+  Timeout in seconds when waiting for a database connection from the pool.
+</ParamField>
+
+## Upstream Configuration
+
+<ParamField path="CODEX_LB_UPSTREAM_BASE_URL" type="string" default="https://chatgpt.com/backend-api">
+  Base URL for the upstream ChatGPT backend API. Do not include the `/codex` suffix.
+</ParamField>
+
+<ParamField path="CODEX_LB_UPSTREAM_CONNECT_TIMEOUT_SECONDS" type="float" default="30.0">
+  Connection timeout in seconds for upstream API requests.
+</ParamField>
+
+<ParamField path="CODEX_LB_STREAM_IDLE_TIMEOUT_SECONDS" type="float" default="300.0">
+  Maximum idle time in seconds for streaming responses before timing out.
+</ParamField>
+
+## OAuth & Token Refresh
+
+<ParamField path="CODEX_LB_AUTH_BASE_URL" type="string" default="https://auth.openai.com">
+  Base URL for the OpenAI authentication service.
+</ParamField>
+
+<ParamField path="CODEX_LB_OAUTH_CLIENT_ID" type="string" default="app_EMoamEEZ73f0CkXaXp7hrann">
+  OAuth client ID for OpenAI authentication. Do not change unless instructed by OpenAI.
+</ParamField>
+
+<ParamField path="CODEX_LB_OAUTH_SCOPE" type="string" default="openid profile email">
+  OAuth scopes to request during authorization.
+</ParamField>
+
+<ParamField path="CODEX_LB_OAUTH_TIMEOUT_SECONDS" type="float" default="30.0">
+  Timeout in seconds for OAuth authorization and token exchange requests.
+</ParamField>
+
+<ParamField path="CODEX_LB_OAUTH_REDIRECT_URI" type="string" default="http://localhost:1455/auth/callback">
+  OAuth redirect URI for the authorization callback. Must match the registered redirect URI.
+  
+  See [OAuth Configuration](/configuration/oauth) for details on redirect URIs.
+</ParamField>
+
+<ParamField path="CODEX_LB_OAUTH_CALLBACK_HOST" type="string" default="127.0.0.1">
+  Host address for the OAuth callback server. Defaults to `0.0.0.0` in Docker containers.
+</ParamField>
+
+<ParamField path="CODEX_LB_OAUTH_CALLBACK_PORT" type="integer" default="1455">
+  Port for the OAuth callback server.
+  
+  <Warning>
+  **Do not change this port.** OpenAI has strict requirements for the callback port. Changing it may break authentication.
+  </Warning>
+</ParamField>
+
+<ParamField path="CODEX_LB_TOKEN_REFRESH_TIMEOUT_SECONDS" type="float" default="30.0">
+  Timeout in seconds for token refresh requests.
+</ParamField>
+
+<ParamField path="CODEX_LB_TOKEN_REFRESH_INTERVAL_DAYS" type="integer" default="8">
+  Interval in days between automatic token refreshes. Codex-LB automatically refreshes account tokens to keep them valid.
+</ParamField>
+
+## Encryption
+
+<ParamField path="CODEX_LB_ENCRYPTION_KEY_FILE" type="string" default="~/.codex-lb/encryption.key">
+  Path to the encryption key file. This file is used to encrypt sensitive data like access tokens and refresh tokens.
+  
+  **Docker deployments**: Override this to persist the key in a Docker volume:
+  ```bash
+  CODEX_LB_ENCRYPTION_KEY_FILE=/var/lib/codex-lb/encryption.key
+  ```
+  
+  <Warning>
+  The encryption key file is critical. If lost, encrypted data cannot be recovered. Back up this file securely.
+  </Warning>
+</ParamField>
+
+## Usage Tracking
+
+<ParamField path="CODEX_LB_USAGE_FETCH_TIMEOUT_SECONDS" type="float" default="10.0">
+  Timeout in seconds for fetching usage data from the upstream API.
+</ParamField>
+
+<ParamField path="CODEX_LB_USAGE_FETCH_MAX_RETRIES" type="integer" default="2">
+  Maximum number of retries when fetching usage data fails.
+</ParamField>
+
+<ParamField path="CODEX_LB_USAGE_REFRESH_ENABLED" type="boolean" default="true">
+  Enable automatic background refresh of usage data for all accounts.
+</ParamField>
+
+<ParamField path="CODEX_LB_USAGE_REFRESH_INTERVAL_SECONDS" type="integer" default="60">
+  Interval in seconds between automatic usage data refreshes.
+</ParamField>
+
+## Firewall & IP Access Control
+
+<ParamField path="CODEX_LB_FIREWALL_TRUST_PROXY_HEADERS" type="boolean" default="false">
+  Trust `X-Forwarded-For` headers for client IP detection.
+  
+  <Warning>
+  **Only enable this when Codex-LB is behind a trusted reverse proxy** (like nginx or Cloudflare).
+  Enabling this without a trusted proxy allows clients to spoof their IP addresses.
+  </Warning>
+  
+  See [Firewall Configuration](/configuration/firewall) for setup details.
+</ParamField>
+
+<ParamField path="CODEX_LB_FIREWALL_TRUSTED_PROXY_CIDRS" type="string" default="127.0.0.1/32,::1/128">
+  Comma-separated list of CIDR ranges for trusted proxy sources. Only requests from these IPs will have their `X-Forwarded-For` headers trusted.
+  
+  **Example** (nginx on localhost + Cloudflare):
+  ```bash
+  CODEX_LB_FIREWALL_TRUSTED_PROXY_CIDRS="127.0.0.1/32,::1/128,173.245.48.0/20,103.21.244.0/22"
+  ```
+</ParamField>
+
+## Advanced Settings
+
+<ParamField path="CODEX_LB_DATABASE_MIGRATIONS_FAIL_FAST" type="boolean" default="true">
+  Terminate the application if database migrations fail. Recommended for production.
+</ParamField>
+
+<ParamField path="CODEX_LB_DATABASE_ALEMBIC_AUTO_REMAP_ENABLED" type="boolean" default="true">
+  Automatically remap legacy Alembic revision IDs during migrations.
+</ParamField>
+
+<ParamField path="CODEX_LB_LOG_PROXY_REQUEST_SHAPE" type="boolean" default="false">
+  Log the shape of proxy requests for debugging. Not recommended in production.
+</ParamField>
+
+<ParamField path="CODEX_LB_LOG_PROXY_REQUEST_SHAPE_RAW_CACHE_KEY" type="boolean" default="false">
+  Log raw cache keys in request shape logs. Only applies if `LOG_PROXY_REQUEST_SHAPE` is enabled.
+</ParamField>
+
+<ParamField path="CODEX_LB_LOG_PROXY_REQUEST_PAYLOAD" type="boolean" default="false">
+  Log full request payloads for debugging. Not recommended in production due to sensitive data.
+</ParamField>
+
+<ParamField path="CODEX_LB_MAX_DECOMPRESSED_BODY_BYTES" type="integer" default="33554432">
+  Maximum size in bytes for decompressed request bodies (32 MiB).
+</ParamField>
+
+<ParamField path="CODEX_LB_MAX_SSE_EVENT_BYTES" type="integer" default="2097152">
+  Maximum size in bytes for Server-Sent Events (2 MiB).
+</ParamField>
+
+<ParamField path="CODEX_LB_IMAGE_INLINE_FETCH_ENABLED" type="boolean" default="true">
+  Enable inline fetching of images in requests.
+</ParamField>
+
+<ParamField path="CODEX_LB_IMAGE_INLINE_ALLOWED_HOSTS" type="string" default="">
+  Comma-separated list of allowed hosts for inline image fetching. Empty means all hosts are allowed.
+</ParamField>
+
+<ParamField path="CODEX_LB_MODEL_REGISTRY_ENABLED" type="boolean" default="true">
+  Enable automatic model registry synchronization from upstream.
+</ParamField>
+
+<ParamField path="CODEX_LB_MODEL_REGISTRY_REFRESH_INTERVAL_SECONDS" type="integer" default="300">
+  Interval in seconds between model registry refreshes.
+</ParamField>
+
+<ParamField path="CODEX_LB_MODEL_REGISTRY_CLIENT_VERSION" type="string" default="0.101.0">
+  Client version to report to the upstream model registry.
+</ParamField>
+
+## Example Configurations
+
+### Local Development
+
+```bash
+# .env.local
+CODEX_LB_DATABASE_URL=sqlite+aiosqlite:///~/.codex-lb/store.db
+CODEX_LB_DATABASE_MIGRATE_ON_STARTUP=true
+CODEX_LB_USAGE_REFRESH_ENABLED=true
+```
+
+### Docker Deployment
+
+```bash
+# .env
+CODEX_LB_DATABASE_URL=sqlite+aiosqlite:///var/lib/codex-lb/store.db
+CODEX_LB_ENCRYPTION_KEY_FILE=/var/lib/codex-lb/encryption.key
+CODEX_LB_OAUTH_CALLBACK_HOST=0.0.0.0
+```
+
+### PostgreSQL with Reverse Proxy
+
+```bash
+# .env.local
+CODEX_LB_DATABASE_URL=postgresql+asyncpg://codex:password@db:5432/codex_lb
+CODEX_LB_DATABASE_POOL_SIZE=20
+CODEX_LB_DATABASE_MAX_OVERFLOW=10
+CODEX_LB_FIREWALL_TRUST_PROXY_HEADERS=true
+CODEX_LB_FIREWALL_TRUSTED_PROXY_CIDRS=172.18.0.0/16
+```

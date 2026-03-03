@@ -1,0 +1,216 @@
+---
+title: 'Settings Management'
+description: 'Configure system-wide dashboard settings'
+---
+
+## Overview
+
+The Settings Management API allows you to retrieve and update system-wide configuration settings for Codex-LB, including routing strategy, authentication requirements, and feature flags.
+
+<Note>
+  All Settings endpoints require dashboard authentication via session cookie.
+</Note>
+
+## Get Settings
+
+<ParamField path="GET /api/settings" type="endpoint">
+  Retrieve current system settings.
+</ParamField>
+
+### Response
+
+<ResponseField name="sticky_threads_enabled" type="boolean" required>
+  Whether to maintain thread affinity (keep same account for a conversation thread)
+</ResponseField>
+
+<ResponseField name="prefer_earlier_reset_accounts" type="boolean" required>
+  Whether to prefer accounts with earlier reset times for load balancing
+</ResponseField>
+
+<ResponseField name="routing_strategy" type="string" required>
+  Load balancing strategy: `usage_weighted` or `round_robin`
+</ResponseField>
+
+<ResponseField name="import_without_overwrite" type="boolean" required>
+  Whether to skip importing accounts that already exist (by identity)
+</ResponseField>
+
+<ResponseField name="totp_required_on_login" type="boolean" required>
+  Whether TOTP (2FA) is required for dashboard login
+</ResponseField>
+
+<ResponseField name="totp_configured" type="boolean" required>
+  Whether TOTP has been configured for the admin user
+</ResponseField>
+
+<ResponseField name="api_key_auth_enabled" type="boolean" required>
+  Whether API key authentication is required for proxy endpoints
+</ResponseField>
+
+### Example Request
+
+```bash
+curl -X GET "https://your-instance.com/api/settings" \
+  -H "Cookie: dashboard_session=your-session-token"
+```
+
+### Example Response
+
+```json
+{
+  "sticky_threads_enabled": true,
+  "prefer_earlier_reset_accounts": false,
+  "routing_strategy": "usage_weighted",
+  "import_without_overwrite": false,
+  "totp_required_on_login": false,
+  "totp_configured": true,
+  "api_key_auth_enabled": true
+}
+```
+
+## Update Settings
+
+<ParamField path="PUT /api/settings" type="endpoint">
+  Update system settings. All boolean fields are required; optional fields default to current values.
+</ParamField>
+
+### Request Body
+
+<ParamField body="sticky_threads_enabled" type="boolean" required>
+  Enable thread affinity to keep conversations on the same account
+</ParamField>
+
+<ParamField body="prefer_earlier_reset_accounts" type="boolean" required>
+  Prioritize accounts with earlier quota reset times
+</ParamField>
+
+<ParamField body="routing_strategy" type="string">
+  Load balancing strategy:
+  - `usage_weighted`: Route to accounts with more available capacity
+  - `round_robin`: Distribute requests evenly across accounts
+</ParamField>
+
+<ParamField body="import_without_overwrite" type="boolean">
+  Skip importing accounts that already exist in the database
+</ParamField>
+
+<ParamField body="totp_required_on_login" type="boolean">
+  Require TOTP (2FA) verification on every dashboard login
+</ParamField>
+
+<ParamField body="api_key_auth_enabled" type="boolean">
+  Require valid API key authentication for all proxy requests
+</ParamField>
+
+### Response
+
+Returns the updated settings object (same structure as GET response).
+
+### Example Request
+
+```bash
+curl -X PUT "https://your-instance.com/api/settings" \
+  -H "Cookie: dashboard_session=your-session-token" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "sticky_threads_enabled": true,
+    "prefer_earlier_reset_accounts": false,
+    "routing_strategy": "usage_weighted",
+    "import_without_overwrite": true,
+    "totp_required_on_login": true,
+    "api_key_auth_enabled": true
+  }'
+```
+
+### Example Response
+
+```json
+{
+  "sticky_threads_enabled": true,
+  "prefer_earlier_reset_accounts": false,
+  "routing_strategy": "usage_weighted",
+  "import_without_overwrite": true,
+  "totp_required_on_login": true,
+  "totp_configured": true,
+  "api_key_auth_enabled": true
+}
+```
+
+### Error Responses
+
+<ResponseField name="400" type="error">
+  **invalid_totp_config**: Cannot enable TOTP requirement without configuring it first
+</ResponseField>
+
+## Setting Descriptions
+
+### Routing Strategy
+
+<Accordion title="usage_weighted (Recommended)">
+  Routes requests to accounts with the most available capacity. This maximizes overall throughput and prevents quota exhaustion on individual accounts.
+  
+  **Best for**: Production environments with varying load patterns
+</Accordion>
+
+<Accordion title="round_robin">
+  Distributes requests evenly across all active accounts, regardless of their current usage levels.
+  
+  **Best for**: Testing environments or when you want predictable distribution
+</Accordion>
+
+### Thread Affinity
+
+<Info>
+  When `sticky_threads_enabled` is true, requests with the same conversation thread ID are routed to the same Claude account. This can improve conversation coherence but may lead to uneven load distribution.
+</Info>
+
+### API Key Authentication
+
+<Warning>
+  When enabling `api_key_auth_enabled`, ensure you have created at least one API key first. Otherwise, all proxy requests will be rejected with 401 Unauthorized.
+</Warning>
+
+When API key authentication is enabled:
+- All proxy endpoints (`/v1/*`, `/backend-api/codex/*`, `/backend-api/transcribe`) require a valid Bearer token
+- The `/api/codex/usage` endpoint remains accessible without authentication
+- Dashboard endpoints (`/api/*`) continue to use session-based authentication
+
+### TOTP (Two-Factor Authentication)
+
+The `totp_required_on_login` setting enforces 2FA for dashboard access:
+
+1. First, configure TOTP in the dashboard settings (sets `totp_configured: true`)
+2. Then enable the requirement via this API or the dashboard UI
+3. Subsequent logins will require a TOTP code from your authenticator app
+
+<Note>
+  You cannot enable `totp_required_on_login` without first configuring TOTP. The API will return a 400 error if you try.
+</Note>
+
+### Import Behavior
+
+When `import_without_overwrite` is enabled:
+- Account imports check for existing identities before inserting
+- If a matching identity exists, the import is skipped (no error)
+- This prevents duplicate accounts when re-importing the same auth.json files
+
+## Cache Behavior
+
+Settings are cached in memory for performance. When you update settings via the API:
+
+1. Changes are written to the database
+2. The in-memory cache is invalidated
+3. Next request fetches fresh settings from the database
+
+Changes take effect immediately for all new requests.
+
+## Authentication
+
+All settings endpoints require dashboard authentication via session cookie. You must be logged in as an admin to view or modify settings.
+
+## Common Error Codes
+
+| Code | Description |
+|------|-------------|
+| `invalid_totp_config` | Attempted to enable TOTP requirement without configuring it first |
+| `unauthorized` | Missing or invalid dashboard session cookie |

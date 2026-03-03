@@ -1,0 +1,408 @@
+---
+title: "Installation"
+description: "Complete installation guide for Docker, uvx, and local development"
+---
+
+## Choose your installation method
+
+Codex-LB supports multiple installation methods depending on your use case.
+
+<CardGroup cols={3}>
+  <Card title="Docker" icon="docker">
+    **Recommended** for production and quick testing
+  </Card>
+  <Card title="uvx" icon="terminal">
+    **Easiest** for personal use and experimentation
+  </Card>
+  <Card title="Local Dev" icon="code">
+    **Required** for contributing or customizing
+  </Card>
+</CardGroup>
+
+## Docker Installation
+
+The recommended method for most users. Provides a fully isolated environment with all dependencies.
+
+### Basic Setup
+
+```bash
+# Create a volume for persistent data
+docker volume create codex-lb-data
+
+# Run Codex-LB
+docker run -d --name codex-lb \
+  -p 2455:2455 -p 1455:1455 \
+  -v codex-lb-data:/var/lib/codex-lb \
+  ghcr.io/soju06/codex-lb:latest
+```
+
+<Info>
+  **Data persistence:** All data (accounts, API keys, usage stats) is stored in the `codex-lb-data` volume at `/var/lib/codex-lb`.
+</Info>
+
+### With Environment Variables
+
+Customize Codex-LB with environment variables:
+
+```bash
+docker run -d --name codex-lb \
+  -p 2455:2455 -p 1455:1455 \
+  -v codex-lb-data:/var/lib/codex-lb \
+  -e CODEX_LB_DATABASE_URL="postgresql+asyncpg://user:pass@host:5432/db" \
+  -e CODEX_LB_USAGE_REFRESH_INTERVAL_SECONDS=120 \
+  ghcr.io/soju06/codex-lb:latest
+```
+
+See [Environment Variables](/configuration/environment-variables) for all available options.
+
+### Using Docker Compose
+
+For more complex setups, use Docker Compose:
+
+```yaml docker-compose.yml
+services:
+  codex-lb:
+    image: ghcr.io/soju06/codex-lb:latest
+    ports:
+      - "2455:2455"
+      - "1455:1455"
+    volumes:
+      - codex-lb-data:/var/lib/codex-lb
+    environment:
+      - CODEX_LB_DATABASE_MIGRATE_ON_STARTUP=true
+      - CODEX_LB_USAGE_REFRESH_ENABLED=true
+    restart: unless-stopped
+
+volumes:
+  codex-lb-data:
+```
+
+Run it:
+```bash
+docker compose up -d
+```
+
+### With PostgreSQL
+
+For production deployments, use PostgreSQL instead of SQLite:
+
+```yaml docker-compose.yml
+services:
+  codex-lb:
+    image: ghcr.io/soju06/codex-lb:latest
+    ports:
+      - "2455:2455"
+      - "1455:1455"
+    volumes:
+      - codex-lb-data:/var/lib/codex-lb
+    environment:
+      - CODEX_LB_DATABASE_URL=postgresql+asyncpg://codex_lb:codex_lb@postgres:5432/codex_lb
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: codex_lb
+      POSTGRES_PASSWORD: codex_lb
+      POSTGRES_DB: codex_lb
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U codex_lb -d codex_lb"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+volumes:
+  codex-lb-data:
+  postgres-data:
+```
+
+<Tip>
+  PostgreSQL is recommended for production deployments with high request volumes or multiple instances.
+</Tip>
+
+### Container Management
+
+<CodeGroup>
+
+```bash View logs
+docker logs codex-lb -f
+```
+
+```bash Stop container
+docker stop codex-lb
+```
+
+```bash Start container
+docker start codex-lb
+```
+
+```bash Restart container
+docker restart codex-lb
+```
+
+```bash Remove container
+docker stop codex-lb
+docker rm codex-lb
+```
+
+```bash Update to latest
+docker pull ghcr.io/soju06/codex-lb:latest
+docker stop codex-lb
+docker rm codex-lb
+# Then run the docker run command again
+```
+
+</CodeGroup>
+
+## uvx Installation
+
+The quickest way to run Codex-LB without Docker. Requires Python 3.13+.
+
+### Install and Run
+
+```bash
+uvx codex-lb
+```
+
+That's it! Codex-LB will start on ports 2455 and 1455.
+
+<Info>
+  **Data location:** `~/.codex-lb/` — includes database, encryption keys, and logs.
+</Info>
+
+### With Custom Settings
+
+Pass environment variables when running:
+
+```bash
+CODEX_LB_DATABASE_URL="postgresql+asyncpg://..." uvx codex-lb
+```
+
+Or create a `.env.local` file in your working directory:
+
+```bash .env.local
+CODEX_LB_DATABASE_URL=sqlite+aiosqlite:///~/.codex-lb/store.db
+CODEX_LB_USAGE_REFRESH_INTERVAL_SECONDS=60
+```
+
+Then run:
+```bash
+uvx codex-lb
+```
+
+### Stopping uvx
+
+Press `Ctrl+C` in the terminal running Codex-LB.
+
+## Local Development
+
+For contributors or users who want to customize Codex-LB.
+
+### Prerequisites
+
+- Python 3.13+
+- [uv](https://docs.astral.sh/uv/) (Python package manager)
+- [Bun](https://bun.sh) (for frontend development)
+- Git
+
+### Clone and Install
+
+<Steps>
+  <Step title="Clone the repository">
+    ```bash
+    git clone https://github.com/Soju06/codex-lb.git
+    cd codex-lb
+    ```
+  </Step>
+
+  <Step title="Install Python dependencies">
+    ```bash
+    uv sync
+    ```
+
+    This creates a virtual environment at `.venv/` and installs all dependencies.
+  </Step>
+
+  <Step title="Install frontend dependencies">
+    ```bash
+    cd frontend
+    bun install
+    cd ..
+    ```
+  </Step>
+
+  <Step title="Build the frontend">
+    ```bash
+    cd frontend
+    bun run build
+    cd ..
+    ```
+
+    This creates production assets in `app/static/`.
+  </Step>
+</Steps>
+
+### Development Servers
+
+Run the backend and frontend separately for hot reloading:
+
+<CodeGroup>
+
+```bash Backend (Port 2455)
+uv run fastapi run app/main.py --reload
+```
+
+```bash Frontend (Port 5173)
+cd frontend
+bun run dev
+```
+
+</CodeGroup>
+
+<Info>
+  In development mode, the frontend runs on port 5173 and proxies API requests to the backend on port 2455.
+</Info>
+
+### Docker Development
+
+Alternatively, use Docker Compose for local development with hot reload:
+
+```bash
+docker compose watch
+```
+
+This watches for file changes and automatically syncs them to the running containers.
+
+### Environment Configuration
+
+Copy the example environment file:
+
+```bash
+cp .env.example .env.local
+```
+
+Edit `.env.local` to customize settings. See [Environment Variables](/configuration/environment-variables) for all options.
+
+### Database Migrations
+
+Run migrations manually:
+
+```bash
+uv run codex-lb-db upgrade head
+```
+
+Create a new migration:
+
+```bash
+uv run alembic revision --autogenerate -m "Description of changes"
+```
+
+### Running Tests
+
+```bash
+# Run all tests
+uv run pytest
+
+# Run with coverage
+uv run pytest --cov=app
+
+# Run specific test file
+uv run pytest tests/test_proxy.py
+```
+
+## Data Storage
+
+Codex-LB stores data in different locations depending on the installation method:
+
+| Method | Location | Contents |
+|--------|----------|----------|
+| Docker | `/var/lib/codex-lb/` | Database, encryption keys, logs |
+| uvx / Local | `~/.codex-lb/` | Database, encryption keys, logs |
+
+<Warning>
+  **Backup your data!** The data directory contains:
+  - Account tokens (encrypted)
+  - API keys
+  - Usage history
+  - Configuration settings
+
+  Losing this directory means losing all accounts and settings.
+</Warning>
+
+### Backing Up
+
+<CodeGroup>
+
+```bash Docker
+# Stop the container
+docker stop codex-lb
+
+# Backup the volume
+docker run --rm -v codex-lb-data:/data -v $(pwd):/backup alpine tar czf /backup/codex-lb-backup.tar.gz -C /data .
+
+# Restart the container
+docker start codex-lb
+```
+
+```bash uvx / Local
+# Create a backup
+tar czf codex-lb-backup.tar.gz -C ~/.codex-lb .
+```
+
+</CodeGroup>
+
+### Restoring
+
+<CodeGroup>
+
+```bash Docker
+# Stop and remove existing container
+docker stop codex-lb
+docker rm codex-lb
+
+# Remove old volume
+docker volume rm codex-lb-data
+
+# Create new volume
+docker volume create codex-lb-data
+
+# Restore backup
+docker run --rm -v codex-lb-data:/data -v $(pwd):/backup alpine tar xzf /backup/codex-lb-backup.tar.gz -C /data
+
+# Start container with restored data
+docker run -d --name codex-lb \
+  -p 2455:2455 -p 1455:1455 \
+  -v codex-lb-data:/var/lib/codex-lb \
+  ghcr.io/soju06/codex-lb:latest
+```
+
+```bash uvx / Local
+# Stop Codex-LB if running
+# Extract backup
+tar xzf codex-lb-backup.tar.gz -C ~/.codex-lb
+```
+
+</CodeGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Add accounts" icon="user-plus" href="/guides/adding-accounts">
+    Link your ChatGPT accounts via OAuth
+  </Card>
+  <Card title="Configure clients" icon="plug" href="/clients/overview">
+    Set up Codex CLI, OpenCode, or other clients
+  </Card>
+  <Card title="Environment variables" icon="sliders" href="/configuration/environment-variables">
+    Customize timeouts, OAuth, database, and more
+  </Card>
+  <Card title="Production deployment" icon="server" href="/deployment/production">
+    Best practices for running Codex-LB in production
+  </Card>
+</CardGroup>

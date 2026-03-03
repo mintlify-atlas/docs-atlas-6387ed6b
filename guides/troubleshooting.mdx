@@ -1,0 +1,876 @@
+---
+title: 'Troubleshooting'
+description: 'Common issues and solutions for Codex-LB'
+icon: 'wrench'
+---
+
+This guide helps you diagnose and resolve common issues with Codex-LB.
+
+## Authentication Issues
+
+### Invalid API Key
+
+**Error**:
+```json
+{
+  "error": {
+    "code": "invalid_api_key",
+    "message": "Invalid API key",
+    "type": "invalid_request_error"
+  }
+}
+```
+
+**HTTP Status**: `401 Unauthorized`
+
+**Common Causes**:
+
+1. **Missing Authorization header**
+   ```bash
+   # Wrong
+   curl https://your-instance.com/v1/chat/completions
+   
+   # Correct
+   curl https://your-instance.com/v1/chat/completions \
+     -H "Authorization: Bearer sk-clb-your-key"
+   ```
+
+2. **Incorrect key format**
+   - API keys must start with `sk-clb-`
+   - Verify you're not using a ChatGPT API key by mistake
+
+3. **Key has been deleted or deactivated**
+   - Check the API Keys page in the dashboard
+   - Verify the key's `is_active` status is `true`
+
+4. **Key has expired**
+   - Check the `expires_at` field in the dashboard
+   - Create a new key or extend the expiration
+
+**Solution**:
+
+<Steps>
+  <Step title="Verify Key Format">
+    Ensure your key starts with `sk-clb-` and is the full token (not just the prefix).
+  </Step>
+
+  <Step title="Check Key Status">
+    In the dashboard, verify:
+    - Key exists in the API Keys list
+    - `is_active` is `true`
+    - `expires_at` is in the future (or `null`)
+  </Step>
+
+  <Step title="Test with New Key">
+    Create a new API key and test with it to rule out key-specific issues.
+  </Step>
+</Steps>
+
+### OAuth Flow Failed
+
+**Error**: "OAuth error: access_denied" or "Invalid OAuth callback state"
+
+**Common Causes**:
+
+1. **User denied authorization**
+   - User clicked "Deny" or closed the browser window
+   - Session expired during authorization
+
+2. **State token mismatch**
+   - CSRF protection detected a potential attack
+   - Session cookie was cleared or expired
+   - Multiple OAuth flows started simultaneously
+
+3. **Callback port not available**
+   - Default callback port `1455` is already in use
+   - Firewall blocking the callback server
+
+**Solution**:
+
+<Steps>
+  <Step title="Restart OAuth Flow">
+    Close the OAuth dialog and start a fresh flow.
+  </Step>
+
+  <Step title="Complete Authorization Quickly">
+    Don't leave the authorization page open for extended periods. Complete it within a few minutes.
+  </Step>
+
+  <Step title="Check Callback Port">
+    If using browser flow, ensure port `1455` is available:
+    
+    ```bash
+    # Check if port is in use
+    lsof -i :1455
+    
+    # If in use, stop the conflicting process or use device flow instead
+    ```
+  </Step>
+
+  <Step title="Try Device Flow">
+    If browser flow continues to fail, use the device code flow instead:
+    
+    1. Select "Device code" in the OAuth dialog
+    2. Copy the user code
+    3. Open the verification URL on any device
+    4. Enter the code and complete authorization
+  </Step>
+</Steps>
+
+### Account Deactivated
+
+**Symptom**: Account shows status `deactivated` in the dashboard
+
+**Common Causes**:
+
+1. **Refresh token expired**
+   - ChatGPT refresh tokens have a limited lifetime
+   - Token was revoked on the ChatGPT side
+
+2. **Account credentials revoked**
+   - Password changed on ChatGPT account
+   - Account logged out of all sessions
+   - 2FA settings changed
+
+3. **Permanent authentication failure**
+   - Account deleted or suspended
+   - Terms of service violation
+
+**Solution**:
+
+<Steps>
+  <Step title="Remove Old Account">
+    Delete the deactivated account from the dashboard.
+  </Step>
+
+  <Step title="Verify ChatGPT Account">
+    Log in to ChatGPT directly to ensure:
+    - Account is active and in good standing
+    - No security alerts or verification required
+    - Subscription is active (if applicable)
+  </Step>
+
+  <Step title="Re-add Account">
+    Add the account again via OAuth with fresh credentials.
+  </Step>
+
+  <Step title="Monitor Status">
+    Check the account status after a few requests to ensure it remains `active`.
+  </Step>
+</Steps>
+
+## Rate Limiting Issues
+
+### API Key Rate Limit Exceeded
+
+**Error**:
+```json
+{
+  "error": {
+    "code": "rate_limit_exceeded",
+    "message": "API key total_tokens daily limit exceeded",
+    "type": "rate_limit_error"
+  }
+}
+```
+
+**HTTP Status**: `429 Too Many Requests`
+
+**Common Causes**:
+
+1. **Configured limit reached**
+   - API key has hit one of its rate limits
+   - Check `current_value` vs `max_value` in the dashboard
+
+2. **Underestimated usage**
+   - Actual usage higher than expected
+   - Large prompts or long completions
+   - Reasoning tokens for o1 models
+
+**Solution**:
+
+<Steps>
+  <Step title="Check Current Usage">
+    In the dashboard, view the API key's limits:
+    
+    ```json
+    {
+      "limit_type": "total_tokens",
+      "limit_window": "daily",
+      "max_value": 1000000,
+      "current_value": 1000000,
+      "reset_at": "2026-03-04T00:00:00Z"
+    }
+    ```
+    
+    Note the `reset_at` time.
+  </Step>
+
+  <Step title="Wait for Reset">
+    If you can wait, the limit will automatically reset at the `reset_at` time.
+    
+    Use the `Retry-After` header to know when to retry:
+    
+    ```http
+    Retry-After: 43200
+    ```
+    
+    This indicates 43,200 seconds (12 hours) until reset.
+  </Step>
+
+  <Step title="Increase Limit">
+    If you need immediate access:
+    
+    1. Edit the API key in the dashboard
+    2. Increase the `max_value` for the limit
+    3. Save changes
+    4. Retry your request
+  </Step>
+
+  <Step title="Reset Usage (Emergency)">
+    As a last resort, manually reset usage:
+    
+    1. Edit the API key
+    2. Check "Reset usage"
+    3. Save changes
+    
+    This sets all `current_value` fields to `0` immediately.
+  </Step>
+</Steps>
+
+### Account Rate Limited
+
+**Symptom**: Account shows status `rate_limited` in the dashboard
+
+**Common Causes**:
+
+1. **ChatGPT rate limit hit**
+   - Account hit ChatGPT's rate limits (requests per minute, tokens per day, etc.)
+   - This is separate from Codex-LB API key limits
+
+2. **High traffic spike**
+   - Sudden increase in request volume
+   - Not enough accounts to handle load
+
+**Solution**:
+
+<Steps>
+  <Step title="Check Reset Time">
+    ChatGPT rate limits typically reset after 3-60 minutes. Check the account's `reset_at` field if available.
+  </Step>
+
+  <Step title="Wait for Recovery">
+    Codex-LB automatically routes requests to other accounts. The rate-limited account will recover automatically.
+  </Step>
+
+  <Step title="Add More Accounts">
+    To prevent future rate limiting:
+    
+    1. Add more ChatGPT accounts to the load balancer
+    2. Distribute traffic across more accounts
+    3. Enable usage-weighted routing for better distribution
+  </Step>
+</Steps>
+
+### Quota Exceeded
+
+**Symptom**: Account shows status `quota_exceeded` in the dashboard
+
+**Common Causes**:
+
+1. **ChatGPT quota exhausted**
+   - Free tier accounts have daily/weekly quotas
+   - Plus/Team accounts have higher but still limited quotas
+
+2. **All accounts exhausted simultaneously**
+   - Insufficient total quota for traffic volume
+
+**Solution**:
+
+<Steps>
+  <Step title="Check Account Plan">
+    Verify the account's plan type:
+    - Free: Very limited quota
+    - Plus: Higher quota
+    - Team/Enterprise: Highest quota
+  </Step>
+
+  <Step title="Wait for Reset">
+    Quotas typically reset daily or weekly. The account will automatically recover.
+  </Step>
+
+  <Step title="Upgrade Accounts">
+    Consider upgrading accounts to Plus or Team for higher quotas.
+  </Step>
+
+  <Step title="Add More Accounts">
+    Add accounts with fresh quotas to increase total capacity.
+  </Step>
+</Steps>
+
+## Routing Issues
+
+### No Available Accounts
+
+**Error**:
+```json
+{
+  "error": {
+    "code": "no_accounts",
+    "message": "No active accounts available",
+    "type": "server_error"
+  }
+}
+```
+
+**HTTP Status**: `503 Service Unavailable`
+
+**Common Causes**:
+
+1. **No accounts added**
+   - Load balancer has no accounts configured
+
+2. **All accounts unavailable**
+   - All accounts are `rate_limited`, `quota_exceeded`, `paused`, or `deactivated`
+
+3. **Token refresh failures**
+   - All accounts have failed token refresh and are deactivated
+
+**Solution**:
+
+<Steps>
+  <Step title="Check Account Status">
+    In the dashboard, review all accounts:
+    
+    ```
+    Account A: rate_limited
+    Account B: quota_exceeded
+    Account C: deactivated
+    ```
+    
+    If all accounts are unavailable, you'll see this error.
+  </Step>
+
+  <Step title="Add New Accounts">
+    If no accounts exist or all are deactivated:
+    
+    1. Click "Add Account" in the dashboard
+    2. Complete OAuth flow
+    3. Verify new account shows `active` status
+  </Step>
+
+  <Step title="Reactivate Paused Accounts">
+    If accounts are paused:
+    
+    1. Select the paused account
+    2. Click "Reactivate"
+    3. Verify status changes to `active`
+  </Step>
+
+  <Step title="Wait for Recovery">
+    If accounts are rate limited or quota exceeded, wait for them to reset automatically.
+  </Step>
+</Steps>
+
+### Model Not Allowed
+
+**Error**:
+```json
+{
+  "error": {
+    "code": "model_not_allowed",
+    "message": "Model 'gpt-4' is not allowed for this API key",
+    "type": "invalid_request_error"
+  }
+}
+```
+
+**HTTP Status**: `403 Forbidden`
+
+**Common Causes**:
+
+1. **Model not in allowed_models list**
+   - API key has `allowed_models` configured
+   - Requested model is not in the list
+
+2. **Case mismatch**
+   - Model names are case-sensitive
+   - `gpt-4` vs `GPT-4` vs `Gpt-4`
+
+**Solution**:
+
+<Steps>
+  <Step title="Check Allowed Models">
+    In the dashboard, check the API key's `allowed_models`:
+    
+    ```json
+    {
+      "allowed_models": ["gpt-3.5-turbo", "gpt-4o-mini"]
+    }
+    ```
+    
+    If `gpt-4` is not in this list, it will be rejected.
+  </Step>
+
+  <Step title="Update Allowed Models">
+    Add the requested model to the list:
+    
+    1. Edit the API key
+    2. Add the model to `allowed_models`
+    3. Ensure exact case match (e.g., `gpt-4`)
+    4. Save changes
+  </Step>
+
+  <Step title="Allow All Models">
+    Alternatively, remove the restriction entirely:
+    
+    1. Edit the API key
+    2. Set `allowed_models` to empty or `null`
+    3. Save changes
+  </Step>
+</Steps>
+
+### Sticky Sessions Not Working
+
+**Symptom**: Requests with the same `prompt_cache_key` are routed to different accounts
+
+**Common Causes**:
+
+1. **Sticky threads disabled**
+   - Setting `sticky_threads_enabled` is `false`
+
+2. **Missing prompt_cache_key**
+   - Request doesn't include `prompt_cache_key` in body
+
+3. **Account became unavailable**
+   - Sticky account hit rate limit or was deactivated
+   - Session reallocated to different account
+
+**Solution**:
+
+<Steps>
+  <Step title="Enable Sticky Threads">
+    In Settings, enable "Sticky threads":
+    
+    ```json
+    {
+      "sticky_threads_enabled": true
+    }
+    ```
+  </Step>
+
+  <Step title="Include prompt_cache_key">
+    Add `prompt_cache_key` to all related requests:
+    
+    ```json
+    {
+      "model": "gpt-4",
+      "messages": [...],
+      "prompt_cache_key": "conversation-123"
+    }
+    ```
+  </Step>
+
+  <Step title="Monitor Account Status">
+    If the sticky account becomes unavailable, Codex-LB automatically reallocates to another account. This is expected behavior.
+  </Step>
+</Steps>
+
+## Request Issues
+
+### Upstream Error
+
+**Error**:
+```json
+{
+  "error": {
+    "code": "upstream_error",
+    "message": "Upstream service error",
+    "type": "server_error"
+  }
+}
+```
+
+**HTTP Status**: `502 Bad Gateway` or `503 Service Unavailable`
+
+**Common Causes**:
+
+1. **ChatGPT API downtime**
+   - Upstream ChatGPT API is experiencing issues
+   - Check [OpenAI Status](https://status.openai.com/)
+
+2. **Network connectivity**
+   - Codex-LB cannot reach ChatGPT API
+   - Firewall or proxy blocking requests
+
+3. **Invalid request payload**
+   - Malformed JSON or unsupported parameters
+   - Check request body for errors
+
+**Solution**:
+
+<Steps>
+  <Step title="Check OpenAI Status">
+    Visit https://status.openai.com/ to see if there are ongoing incidents.
+  </Step>
+
+  <Step title="Retry Request">
+    Upstream errors are often transient. Retry with exponential backoff:
+    
+    ```python
+    import time
+    
+    for attempt in range(3):
+        try:
+            response = client.chat.completions.create(...)
+            break
+        except Exception as e:
+            if attempt < 2:
+                time.sleep(2 ** attempt)
+            else:
+                raise
+    ```
+  </Step>
+
+  <Step title="Check Logs">
+    Review Codex-LB logs for detailed error messages:
+    
+    ```bash
+    docker logs codex-lb
+    ```
+    
+    Look for connection errors, DNS failures, or timeout messages.
+  </Step>
+
+  <Step title="Verify Request Payload">
+    Ensure your request is valid:
+    
+    ```bash
+    curl -X POST https://your-instance.com/v1/chat/completions \
+      -H "Authorization: Bearer sk-clb-your-key" \
+      -H "Content-Type: application/json" \
+      -d '{
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": "test"}]
+      }'
+    ```
+  </Step>
+</Steps>
+
+### Timeout Errors
+
+**Symptom**: Request takes a very long time or times out
+
+**Common Causes**:
+
+1. **Large prompts or completions**
+   - Very long input or output
+   - O1 models with high reasoning effort
+
+2. **Upstream ChatGPT slow**
+   - ChatGPT API is experiencing high latency
+
+3. **Client timeout too short**
+   - Client has a timeout shorter than the request duration
+
+**Solution**:
+
+<Steps>
+  <Step title="Increase Client Timeout">
+    Set a higher timeout in your client:
+    
+    ```python
+    from openai import OpenAI
+    
+    client = OpenAI(
+        base_url="https://your-instance.com/v1",
+        api_key="sk-clb-your-key",
+        timeout=120.0  # 120 seconds
+    )
+    ```
+  </Step>
+
+  <Step title="Use Streaming">
+    For long completions, use streaming to get partial results:
+    
+    ```python
+    response = client.chat.completions.create(
+        model="gpt-4",
+        messages=[{"role": "user", "content": "..."}],
+        stream=True
+    )
+    
+    for chunk in response:
+        print(chunk.choices[0].delta.content, end="")
+    ```
+  </Step>
+
+  <Step title="Reduce Prompt Size">
+    If possible, reduce the input size:
+    
+    - Summarize or truncate long contexts
+    - Remove unnecessary information
+    - Use more concise prompts
+  </Step>
+</Steps>
+
+### Invalid Response Format
+
+**Symptom**: Response doesn't match expected OpenAI format
+
+**Common Causes**:
+
+1. **Error response**
+   - Request failed and returned an error object
+   - Check for `error` field in response
+
+2. **Streaming mode mismatch**
+   - Client expects streaming but `stream: false`
+   - Client expects non-streaming but `stream: true`
+
+**Solution**:
+
+<Steps>
+  <Step title="Check for Errors">
+    Always check if the response is an error:
+    
+    ```python
+    try:
+        response = client.chat.completions.create(...)
+    except Exception as e:
+        print(f"Error: {e}")
+    ```
+  </Step>
+
+  <Step title="Match Streaming Mode">
+    Ensure client and request agree on streaming:
+    
+    ```python
+    # Non-streaming
+    response = client.chat.completions.create(
+        model="gpt-4",
+        messages=[...],
+        stream=False  # or omit
+    )
+    print(response.choices[0].message.content)
+    
+    # Streaming
+    response = client.chat.completions.create(
+        model="gpt-4",
+        messages=[...],
+        stream=True
+    )
+    for chunk in response:
+        print(chunk.choices[0].delta.content or "", end="")
+    ```
+  </Step>
+</Steps>
+
+## Performance Issues
+
+### High Latency
+
+**Symptom**: Requests take longer than expected
+
+**Common Causes**:
+
+1. **Upstream latency**
+   - ChatGPT API is slow
+   - Check OpenAI status
+
+2. **Account selection overhead**
+   - Many accounts to evaluate
+   - Complex routing logic
+
+3. **Database queries**
+   - Slow database reads for account/key lookup
+
+**Solution**:
+
+<Steps>
+  <Step title="Measure Latency Components">
+    Check the `X-Request-ID` header and review logs to see:
+    
+    - Time to select account
+    - Time for upstream request
+    - Time for response processing
+  </Step>
+
+  <Step title="Optimize Routing">
+    Use simpler routing strategy:
+    
+    - Switch to `round_robin` if using `usage_weighted`
+    - Disable "prefer earlier reset" if enabled
+    - Disable sticky sessions if not needed
+  </Step>
+
+  <Step title="Use Fewer Accounts">
+    Remove inactive or redundant accounts:
+    
+    - Delete deactivated accounts
+    - Remove paused accounts not in use
+    - Keep only necessary accounts
+  </Step>
+</Steps>
+
+### High Error Rate
+
+**Symptom**: Many requests fail with 429, 503, or 502 errors
+
+**Common Causes**:
+
+1. **Insufficient capacity**
+   - Not enough accounts for request volume
+   - Accounts hitting rate limits frequently
+
+2. **Account issues**
+   - Accounts becoming deactivated
+   - Token refresh failures
+
+**Solution**:
+
+<Steps>
+  <Step title="Add More Accounts">
+    Increase total capacity by adding more ChatGPT accounts.
+  </Step>
+
+  <Step title="Implement Client Retries">
+    Add retry logic in your application:
+    
+    ```python
+    from openai import OpenAI
+    import time
+    
+    client = OpenAI(
+        base_url="https://your-instance.com/v1",
+        api_key="sk-clb-your-key",
+        max_retries=3
+    )
+    ```
+  </Step>
+
+  <Step title="Monitor Account Health">
+    Regularly check account status in the dashboard and reactivate or replace problematic accounts.
+  </Step>
+</Steps>
+
+## Dashboard Issues
+
+### Cannot Access Dashboard
+
+**Symptom**: Dashboard login page doesn't load or returns error
+
+**Common Causes**:
+
+1. **Codex-LB not running**
+   - Service is stopped or crashed
+
+2. **Wrong URL or port**
+   - Dashboard runs on a different port (default: 3000)
+
+3. **Firewall blocking access**
+   - Network firewall blocking dashboard port
+
+**Solution**:
+
+<Steps>
+  <Step title="Verify Service Running">
+    Check if Codex-LB is running:
+    
+    ```bash
+    docker ps | grep codex-lb
+    # or
+    systemctl status codex-lb
+    ```
+  </Step>
+
+  <Step title="Check Port">
+    Verify the correct port:
+    
+    ```bash
+    # Default: http://localhost:3000
+    curl http://localhost:3000/health
+    ```
+  </Step>
+
+  <Step title="Check Logs">
+    Review logs for startup errors:
+    
+    ```bash
+    docker logs codex-lb
+    ```
+  </Step>
+</Steps>
+
+### Login Failed
+
+**Symptom**: Cannot log in to dashboard
+
+**Common Causes**:
+
+1. **Wrong password**
+   - Incorrect admin password
+
+2. **TOTP enabled**
+   - 2FA required but not provided
+
+3. **Session expired**
+   - Previous session timed out
+
+**Solution**:
+
+<Steps>
+  <Step title="Verify Password">
+    Double-check your admin password. If you've forgotten it, reset via environment variable or config file.
+  </Step>
+
+  <Step title="Enter TOTP Code">
+    If 2FA is enabled, enter the 6-digit code from your authenticator app.
+  </Step>
+
+  <Step title="Clear Browser Cache">
+    Clear cookies and try again:
+    
+    1. Open browser developer tools
+    2. Go to Application → Cookies
+    3. Delete cookies for the dashboard domain
+    4. Refresh and log in again
+  </Step>
+</Steps>
+
+## Getting Help
+
+If you're still experiencing issues:
+
+1. **Check Logs**: Review Codex-LB logs for detailed error messages
+   ```bash
+   docker logs codex-lb --tail=100 --follow
+   ```
+
+2. **Enable Debug Logging**: Set log level to DEBUG for more details
+   ```bash
+   LOG_LEVEL=DEBUG docker restart codex-lb
+   ```
+
+3. **Review Documentation**: Check other guides for related information:
+   - [Adding Accounts](/guides/adding-accounts)
+   - [Managing API Keys](/guides/managing-api-keys)
+   - [Rate Limiting](/guides/rate-limiting)
+   - [Model Routing](/guides/model-routing)
+
+4. **Contact Support**: Reach out with:
+   - Error messages (sanitized)
+   - Steps to reproduce
+   - Relevant log excerpts
+   - Configuration details (without secrets)
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="API Reference" icon="code" href="/api-reference/introduction">
+    Explore the complete API documentation
+  </Card>
+  <Card title="Development" icon="code-branch" href="/development">
+    Set up a development environment
+  </Card>
+</CardGroup>

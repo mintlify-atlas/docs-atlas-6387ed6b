@@ -1,0 +1,345 @@
+---
+title: Database Configuration
+description: Configure SQLite or PostgreSQL as your Codex-LB database backend
+---
+
+Codex-LB supports two database backends: **SQLite** (default) and **PostgreSQL**. SQLite is recommended for most deployments, while PostgreSQL is available for high-traffic or multi-instance setups.
+
+## SQLite (Default)
+
+SQLite is the default database backend and is suitable for most use cases. It requires no external services and stores all data in a single file.
+
+### Configuration
+
+```bash
+# Default SQLite configuration
+CODEX_LB_DATABASE_URL=sqlite+aiosqlite:///~/.codex-lb/store.db
+```
+
+The `~` expands to your home directory. For Docker deployments:
+
+```bash
+CODEX_LB_DATABASE_URL=sqlite+aiosqlite:///var/lib/codex-lb/store.db
+```
+
+### SQLite Features
+
+<AccordionGroup>
+  <Accordion title="Automatic Backups">
+    Codex-LB automatically creates backups before running database migrations.
+    
+    ```bash
+    CODEX_LB_DATABASE_SQLITE_PRE_MIGRATE_BACKUP_ENABLED=true
+    CODEX_LB_DATABASE_SQLITE_PRE_MIGRATE_BACKUP_MAX_FILES=5
+    ```
+    
+    Backups are stored in the same directory as the database file with a timestamp:
+    ```
+    ~/.codex-lb/store.db
+    ~/.codex-lb/store.db.backup.20260303-120000
+    ~/.codex-lb/store.db.backup.20260302-110000
+    ```
+  </Accordion>
+  
+  <Accordion title="WAL Mode">
+    Codex-LB enables SQLite's Write-Ahead Logging (WAL) mode for improved concurrency and crash recovery.
+    
+    **Benefits:**
+    - Multiple readers can access the database while a writer is active
+    - Better crash recovery
+    - Improved performance for concurrent workloads
+    
+    WAL mode creates additional files alongside your database:
+    ```
+    ~/.codex-lb/store.db
+    ~/.codex-lb/store.db-wal
+    ~/.codex-lb/store.db-shm
+    ```
+    
+    These files are managed automatically and should be included in backups.
+  </Accordion>
+  
+  <Accordion title="Connection Pooling">
+    SQLite uses a connection pool for better performance:
+    
+    ```bash
+    CODEX_LB_DATABASE_POOL_SIZE=15
+    CODEX_LB_DATABASE_MAX_OVERFLOW=10
+    CODEX_LB_DATABASE_POOL_TIMEOUT_SECONDS=30.0
+    ```
+    
+    - **Pool Size**: Maximum number of persistent connections
+    - **Max Overflow**: Additional connections that can be created temporarily
+    - **Timeout**: How long to wait for an available connection
+  </Accordion>
+</AccordionGroup>
+
+### SQLite Limitations
+
+<Warning>
+SQLite has some limitations compared to PostgreSQL:
+
+- **Single Writer**: Only one process can write at a time
+- **No Network Access**: Cannot be accessed remotely
+- **Limited Concurrency**: Not suitable for high-traffic multi-instance deployments
+
+For most single-instance deployments, these limitations are not a concern.
+</Warning>
+
+## PostgreSQL
+
+PostgreSQL is recommended for high-traffic deployments or when running multiple Codex-LB instances.
+
+### Setup
+
+1. **Install PostgreSQL** (if not already installed):
+
+```bash
+# Ubuntu/Debian
+sudo apt install postgresql postgresql-contrib
+
+# macOS
+brew install postgresql
+
+# Docker
+docker run -d --name postgres \
+  -e POSTGRES_PASSWORD=yourpassword \
+  -e POSTGRES_DB=codex_lb \
+  -p 5432:5432 \
+  postgres:16
+```
+
+2. **Create a Database and User**:
+
+```sql
+CREATE DATABASE codex_lb;
+CREATE USER codex_lb WITH PASSWORD 'your_secure_password';
+GRANT ALL PRIVILEGES ON DATABASE codex_lb TO codex_lb;
+
+-- PostgreSQL 15+ requires additional grants
+\c codex_lb
+GRANT ALL ON SCHEMA public TO codex_lb;
+```
+
+3. **Configure Codex-LB**:
+
+```bash
+CODEX_LB_DATABASE_URL=postgresql+asyncpg://codex_lb:your_secure_password@localhost:5432/codex_lb
+```
+
+### Connection URL Format
+
+```
+postgresql+asyncpg://[user]:[password]@[host]:[port]/[database]
+```
+
+**Examples:**
+
+```bash
+# Local PostgreSQL
+CODEX_LB_DATABASE_URL=postgresql+asyncpg://codex_lb:password@localhost:5432/codex_lb
+
+# Remote PostgreSQL
+CODEX_LB_DATABASE_URL=postgresql+asyncpg://codex_lb:password@db.example.com:5432/codex_lb
+
+# Docker Compose (service name as host)
+CODEX_LB_DATABASE_URL=postgresql+asyncpg://codex_lb:password@postgres:5432/codex_lb
+
+# Unix Socket
+CODEX_LB_DATABASE_URL=postgresql+asyncpg://codex_lb:password@/codex_lb?host=/var/run/postgresql
+```
+
+### PostgreSQL Connection Pool
+
+PostgreSQL uses a connection pool for optimal performance:
+
+```bash
+CODEX_LB_DATABASE_POOL_SIZE=20
+CODEX_LB_DATABASE_MAX_OVERFLOW=10
+CODEX_LB_DATABASE_POOL_TIMEOUT_SECONDS=30.0
+```
+
+<Tip>
+**Recommended Pool Sizes:**
+
+- **Light traffic** (< 10 req/s): `POOL_SIZE=10`, `MAX_OVERFLOW=5`
+- **Medium traffic** (10-50 req/s): `POOL_SIZE=20`, `MAX_OVERFLOW=10`
+- **High traffic** (> 50 req/s): `POOL_SIZE=40`, `MAX_OVERFLOW=20`
+
+Monitor your PostgreSQL connection count and adjust accordingly.
+</Tip>
+
+### PostgreSQL vs SQLite
+
+| Feature | SQLite | PostgreSQL |
+|---------|--------|------------|
+| Setup | Zero config | Requires server |
+| Concurrency | Limited | Excellent |
+| Network Access | No | Yes |
+| Multi-Instance | No | Yes |
+| Backups | Automatic | Manual or tools |
+| Performance | Fast for single instance | Better for high traffic |
+
+## Database Migrations
+
+Codex-LB uses Alembic for database migrations. Migrations run automatically on startup by default.
+
+### Automatic Migrations
+
+```bash
+CODEX_LB_DATABASE_MIGRATE_ON_STARTUP=true
+CODEX_LB_DATABASE_MIGRATIONS_FAIL_FAST=true
+```
+
+- **MIGRATE_ON_STARTUP**: Run migrations automatically when Codex-LB starts
+- **FAIL_FAST**: Stop startup if migrations fail (recommended for production)
+
+### Manual Migrations
+
+If you prefer to run migrations manually:
+
+```bash
+CODEX_LB_DATABASE_MIGRATE_ON_STARTUP=false
+```
+
+Then run migrations using Alembic:
+
+```bash
+# Upgrade to latest
+alembic upgrade head
+
+# Check current version
+alembic current
+
+# Show migration history
+alembic history
+```
+
+## Backup & Recovery
+
+### SQLite Backups
+
+SQLite backups are created automatically before migrations. To create manual backups:
+
+```bash
+# Stop Codex-LB first
+sudo systemctl stop codex-lb
+
+# Copy the database file
+cp ~/.codex-lb/store.db ~/.codex-lb/store.db.backup.$(date +%Y%m%d)
+
+# Include WAL files
+cp ~/.codex-lb/store.db-wal ~/.codex-lb/store.db-wal.backup.$(date +%Y%m%d)
+cp ~/.codex-lb/store.db-shm ~/.codex-lb/store.db-shm.backup.$(date +%Y%m%d)
+```
+
+### PostgreSQL Backups
+
+Use `pg_dump` for PostgreSQL backups:
+
+```bash
+# Backup
+pg_dump -U codex_lb -h localhost codex_lb > codex_lb_backup.sql
+
+# Restore
+psql -U codex_lb -h localhost codex_lb < codex_lb_backup.sql
+```
+
+For continuous backups, consider:
+- **pg_basebackup**: Physical backups
+- **WAL archiving**: Point-in-time recovery
+- **Cloud backups**: AWS RDS automated backups, etc.
+
+## Troubleshooting
+
+### SQLite Database Locked
+
+```
+SQLite integrity check failed (database is locked)
+```
+
+**Cause**: Another Codex-LB instance is accessing the database.
+
+**Solution**: Stop all Codex-LB instances and restart:
+
+```bash
+sudo systemctl stop codex-lb
+sudo systemctl start codex-lb
+```
+
+### PostgreSQL Connection Refused
+
+```
+connection refused at localhost:5432
+```
+
+**Solutions:**
+1. Verify PostgreSQL is running: `sudo systemctl status postgresql`
+2. Check the connection URL format
+3. Verify firewall rules allow port 5432
+4. Check `pg_hba.conf` for access permissions
+
+### Migration Failures
+
+If migrations fail:
+
+1. Check logs for specific error messages
+2. Verify database connectivity
+3. For SQLite, restore from automatic backup:
+
+```bash
+cd ~/.codex-lb
+cp store.db.backup.YYYYMMDD-HHMMSS store.db
+```
+
+4. For PostgreSQL, restore from `pg_dump` backup
+
+## Docker Deployment
+
+### SQLite with Docker Volume
+
+```yaml
+# docker-compose.yml
+services:
+  codex-lb:
+    image: ghcr.io/soju06/codex-lb:latest
+    volumes:
+      - codex-lb-data:/var/lib/codex-lb
+    environment:
+      - CODEX_LB_DATABASE_URL=sqlite+aiosqlite:///var/lib/codex-lb/store.db
+      - CODEX_LB_ENCRYPTION_KEY_FILE=/var/lib/codex-lb/encryption.key
+    ports:
+      - "2455:2455"
+      - "1455:1455"
+
+volumes:
+  codex-lb-data:
+```
+
+### PostgreSQL with Docker Compose
+
+```yaml
+# docker-compose.yml
+services:
+  codex-lb:
+    image: ghcr.io/soju06/codex-lb:latest
+    depends_on:
+      - postgres
+    environment:
+      - CODEX_LB_DATABASE_URL=postgresql+asyncpg://codex_lb:password@postgres:5432/codex_lb
+    ports:
+      - "2455:2455"
+      - "1455:1455"
+
+  postgres:
+    image: postgres:16
+    environment:
+      - POSTGRES_DB=codex_lb
+      - POSTGRES_USER=codex_lb
+      - POSTGRES_PASSWORD=password
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+
+volumes:
+  postgres-data:
+```

@@ -1,0 +1,476 @@
+---
+title: 'API Key Management'
+description: 'Create and manage API keys for authentication and rate limiting'
+---
+
+## Overview
+
+The API Key Management API allows you to create, list, update, delete, and regenerate API keys for authenticating proxy requests. API keys support model restrictions, usage limits (token-based and cost-based), and expiration dates.
+
+<Note>
+  All API Key Management endpoints require dashboard authentication via session cookie.
+</Note>
+
+## Create API Key
+
+<ParamField path="POST /api/api-keys" type="endpoint">
+  Create a new API key with optional restrictions and limits.
+</ParamField>
+
+### Request Body
+
+<ParamField body="name" type="string" required>
+  Human-readable name for the API key (1-128 characters)
+</ParamField>
+
+<ParamField body="allowed_models" type="array">
+  List of allowed model names. If null or empty, all models are allowed.
+</ParamField>
+
+<ParamField body="expires_at" type="string">
+  ISO 8601 timestamp when the key should expire. If null, the key never expires.
+</ParamField>
+
+<ParamField body="limits" type="array">
+  Array of usage limit rules
+  
+  <Expandable title="LimitRule object">
+    <ParamField body="limit_type" type="string" required>
+      Type of limit: `total_tokens`, `input_tokens`, `output_tokens`, or `cost_usd`
+    </ParamField>
+    
+    <ParamField body="limit_window" type="string" required>
+      Time window: `daily`, `weekly`, or `monthly`
+    </ParamField>
+    
+    <ParamField body="max_value" type="integer" required>
+      Maximum value for the limit (must be >= 1)
+    </ParamField>
+    
+    <ParamField body="model_filter" type="string">
+      Optional model name to scope this limit to a specific model. If null, limit applies globally.
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ParamField body="weekly_token_limit" type="integer" deprecated>
+  Legacy field for weekly token limit. Use `limits` array instead.
+</ParamField>
+
+### Response
+
+<ResponseField name="id" type="string" required>
+  Unique key identifier (UUID)
+</ResponseField>
+
+<ResponseField name="name" type="string" required>
+  Key name
+</ResponseField>
+
+<ResponseField name="key" type="string" required>
+  The full API key (format: `sk-clb-{48 hex chars}`). **Only returned once on creation.**
+</ResponseField>
+
+<ResponseField name="key_prefix" type="string" required>
+  First 16 characters of the key for identification
+</ResponseField>
+
+<ResponseField name="allowed_models" type="array">
+  List of allowed models, or null for all models
+</ResponseField>
+
+<ResponseField name="expires_at" type="string">
+  Expiration timestamp
+</ResponseField>
+
+<ResponseField name="is_active" type="boolean" required>
+  Whether the key is active
+</ResponseField>
+
+<ResponseField name="created_at" type="string" required>
+  Creation timestamp
+</ResponseField>
+
+<ResponseField name="last_used_at" type="string">
+  Last usage timestamp
+</ResponseField>
+
+<ResponseField name="limits" type="array" required>
+  Array of limit rules with current usage
+  
+  <Expandable title="LimitRuleResponse">
+    <ResponseField name="id" type="integer">Limit rule ID</ResponseField>
+    <ResponseField name="limit_type" type="string">Limit type</ResponseField>
+    <ResponseField name="limit_window" type="string">Time window</ResponseField>
+    <ResponseField name="max_value" type="integer">Maximum value</ResponseField>
+    <ResponseField name="current_value" type="integer">Current usage</ResponseField>
+    <ResponseField name="model_filter" type="string">Optional model filter</ResponseField>
+    <ResponseField name="reset_at" type="string">Next reset timestamp</ResponseField>
+  </Expandable>
+</ResponseField>
+
+### Example Request
+
+```bash
+curl -X POST "https://your-instance.com/api/api-keys" \
+  -H "Cookie: dashboard_session=your-session-token" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Production Key",
+    "allowed_models": ["claude-opus-4-20250514", "claude-sonnet-4-20250514"],
+    "expires_at": "2026-12-31T23:59:59Z",
+    "limits": [
+      {
+        "limit_type": "total_tokens",
+        "limit_window": "daily",
+        "max_value": 1000000
+      },
+      {
+        "limit_type": "cost_usd",
+        "limit_window": "monthly",
+        "max_value": 100,
+        "model_filter": "claude-opus-4-20250514"
+      }
+    ]
+  }'
+```
+
+### Example Response
+
+```json
+{
+  "id": "key_abc123def456",
+  "name": "Production Key",
+  "key": "sk-clb-a1b2c3d4e5f6789012345678901234567890123456789012",
+  "key_prefix": "sk-clb-a1b2c3d4",
+  "allowed_models": ["claude-opus-4-20250514", "claude-sonnet-4-20250514"],
+  "expires_at": "2026-12-31T23:59:59Z",
+  "is_active": true,
+  "created_at": "2026-03-03T19:00:00Z",
+  "last_used_at": null,
+  "limits": [
+    {
+      "id": 1,
+      "limit_type": "total_tokens",
+      "limit_window": "daily",
+      "max_value": 1000000,
+      "current_value": 0,
+      "model_filter": null,
+      "reset_at": "2026-03-04T00:00:00Z"
+    },
+    {
+      "id": 2,
+      "limit_type": "cost_usd",
+      "limit_window": "monthly",
+      "max_value": 100,
+      "current_value": 0,
+      "model_filter": "claude-opus-4-20250514",
+      "reset_at": "2026-04-01T00:00:00Z"
+    }
+  ]
+}
+```
+
+<Warning>
+  The full API key is only returned once during creation. Store it securely - it cannot be retrieved later.
+</Warning>
+
+### Error Responses
+
+<ResponseField name="400" type="error">
+  **invalid_api_key_payload**: Invalid request payload (e.g., invalid limit configuration)
+</ResponseField>
+
+## List API Keys
+
+<ParamField path="GET /api/api-keys" type="endpoint">
+  Retrieve all API keys with their metadata and current usage.
+</ParamField>
+
+### Response
+
+Returns an array of API key objects (same structure as create response, but without the `key` field).
+
+### Example Request
+
+```bash
+curl -X GET "https://your-instance.com/api/api-keys" \
+  -H "Cookie: dashboard_session=your-session-token"
+```
+
+### Example Response
+
+```json
+[
+  {
+    "id": "key_abc123def456",
+    "name": "Production Key",
+    "key_prefix": "sk-clb-a1b2c3d4",
+    "allowed_models": ["claude-opus-4-20250514"],
+    "expires_at": "2026-12-31T23:59:59Z",
+    "is_active": true,
+    "created_at": "2026-03-03T19:00:00Z",
+    "last_used_at": "2026-03-03T20:15:00Z",
+    "limits": [
+      {
+        "id": 1,
+        "limit_type": "total_tokens",
+        "limit_window": "daily",
+        "max_value": 1000000,
+        "current_value": 45230,
+        "model_filter": null,
+        "reset_at": "2026-03-04T00:00:00Z"
+      }
+    ]
+  }
+]
+```
+
+## Update API Key
+
+<ParamField path="PATCH /api/api-keys/{key_id}" type="endpoint">
+  Update an existing API key's properties. Only provided fields are updated.
+</ParamField>
+
+### Path Parameters
+
+<ParamField path="key_id" type="string" required>
+  The API key ID to update
+</ParamField>
+
+### Request Body
+
+<ParamField body="name" type="string">
+  New name for the key (1-128 characters)
+</ParamField>
+
+<ParamField body="allowed_models" type="array">
+  Updated list of allowed models
+</ParamField>
+
+<ParamField body="expires_at" type="string">
+  New expiration timestamp
+</ParamField>
+
+<ParamField body="is_active" type="boolean">
+  Set to false to deactivate the key
+</ParamField>
+
+<ParamField body="limits" type="array">
+  Updated limit rules. If omitted, existing limits are preserved. See create endpoint for structure.
+</ParamField>
+
+<ParamField body="reset_usage" type="boolean">
+  Set to true to reset all usage counters to zero
+</ParamField>
+
+### Response
+
+Returns the updated API key object (same structure as list endpoint).
+
+### Example Request - Deactivate Key
+
+```bash
+curl -X PATCH "https://your-instance.com/api/api-keys/key_abc123def456" \
+  -H "Cookie: dashboard_session=your-session-token" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "is_active": false
+  }'
+```
+
+### Example Request - Update Limits
+
+```bash
+curl -X PATCH "https://your-instance.com/api/api-keys/key_abc123def456" \
+  -H "Cookie: dashboard_session=your-session-token" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Updated Key Name",
+    "limits": [
+      {
+        "limit_type": "total_tokens",
+        "limit_window": "weekly",
+        "max_value": 5000000
+      }
+    ]
+  }'
+```
+
+<Info>
+  When updating limits, existing usage state is preserved for matching rules (same type, window, and model_filter). Only the max_value can be changed without resetting usage.
+</Info>
+
+### Error Responses
+
+<ResponseField name="404" type="error">
+  **Not Found**: The specified key ID does not exist
+</ResponseField>
+
+<ResponseField name="400" type="error">
+  **invalid_api_key_payload**: Invalid request payload
+</ResponseField>
+
+## Delete API Key
+
+<ParamField path="DELETE /api/api-keys/{key_id}" type="endpoint">
+  Permanently delete an API key. The key will immediately stop authenticating.
+</ParamField>
+
+### Path Parameters
+
+<ParamField path="key_id" type="string" required>
+  The API key ID to delete
+</ParamField>
+
+### Response
+
+Returns HTTP 204 No Content on success.
+
+### Example Request
+
+```bash
+curl -X DELETE "https://your-instance.com/api/api-keys/key_abc123def456" \
+  -H "Cookie: dashboard_session=your-session-token"
+```
+
+### Error Responses
+
+<ResponseField name="404" type="error">
+  **Not Found**: The specified key ID does not exist
+</ResponseField>
+
+## Regenerate API Key
+
+<ParamField path="POST /api/api-keys/{key_id}/regenerate" type="endpoint">
+  Generate a new key value while preserving all other properties. The old key immediately stops working.
+</ParamField>
+
+### Path Parameters
+
+<ParamField path="key_id" type="string" required>
+  The API key ID to regenerate
+</ParamField>
+
+### Response
+
+Returns the updated API key object with the new `key` and `key_prefix`. The full key is only shown once.
+
+### Example Request
+
+```bash
+curl -X POST "https://your-instance.com/api/api-keys/key_abc123def456/regenerate" \
+  -H "Cookie: dashboard_session=your-session-token"
+```
+
+### Example Response
+
+```json
+{
+  "id": "key_abc123def456",
+  "name": "Production Key",
+  "key": "sk-clb-9f8e7d6c5b4a3210987654321098765432109876543210",
+  "key_prefix": "sk-clb-9f8e7d6c",
+  "allowed_models": ["claude-opus-4-20250514"],
+  "expires_at": "2026-12-31T23:59:59Z",
+  "is_active": true,
+  "created_at": "2026-03-03T19:00:00Z",
+  "last_used_at": "2026-03-03T20:15:00Z",
+  "limits": []
+}
+```
+
+<Warning>
+  The old key stops working immediately. Update all clients with the new key value.
+</Warning>
+
+### Error Responses
+
+<ResponseField name="404" type="error">
+  **Not Found**: The specified key ID does not exist
+</ResponseField>
+
+## Key Format
+
+All API keys follow the format:
+
+```
+sk-clb-{48 hexadecimal characters}
+```
+
+Example: `sk-clb-a1b2c3d4e5f6789012345678901234567890123456789012`
+
+The system stores only the SHA256 hash of the key. The plain key is returned only during creation and regeneration.
+
+## Usage Limits
+
+### Limit Types
+
+- **total_tokens**: Total input + output tokens
+- **input_tokens**: Input tokens only
+- **output_tokens**: Output tokens only
+- **cost_usd**: Cost in US dollars
+
+### Limit Windows
+
+- **daily**: Resets every 24 hours
+- **weekly**: Resets every 7 days
+- **monthly**: Resets on the 1st of each month
+
+### Model-Scoped Limits
+
+Limits can be scoped to specific models using the `model_filter` field:
+
+- `model_filter: null` - Applies to all requests (global limit)
+- `model_filter: "claude-opus-4-20250514"` - Applies only to requests using this model
+
+Multiple limits can be combined. For example:
+
+```json
+[
+  {
+    "limit_type": "total_tokens",
+    "limit_window": "daily",
+    "max_value": 1000000,
+    "model_filter": null
+  },
+  {
+    "limit_type": "cost_usd",
+    "limit_window": "monthly",
+    "max_value": 50,
+    "model_filter": "claude-opus-4-20250514"
+  }
+]
+```
+
+This configuration:
+1. Limits total daily tokens across all models to 1M
+2. Limits monthly cost for Opus requests to $50
+
+### Limit Enforcement
+
+When a limit is exceeded, proxy requests return:
+
+```json
+{
+  "error": {
+    "code": "rate_limit_exceeded",
+    "message": "API key rate limit exceeded",
+    "type": "rate_limit_error"
+  }
+}
+```
+
+HTTP Status: 429 Too Many Requests
+
+## Authentication
+
+All API key management endpoints require dashboard authentication via session cookie. These endpoints are separate from the API key authentication used for proxy requests.
+
+## Common Error Codes
+
+| Code | Description |
+|------|-------------|
+| `invalid_api_key_payload` | Request payload validation failed |
+| `rate_limit_exceeded` | API key usage limit exceeded (during proxy requests) |
+| `model_not_allowed` | Requested model not in allowed_models list (during proxy requests) |

@@ -1,0 +1,142 @@
+---
+title: API Overview
+description: Introduction to the Codex-LB API, base URLs, versioning, and endpoints
+---
+
+## Introduction
+
+Codex-LB provides a dual-interface API that supports both OpenAI-compatible endpoints and Codex-specific endpoints. The API enables load-balanced access to ChatGPT models through multiple authenticated accounts, with built-in rate limiting, usage tracking, and model routing capabilities.
+
+## Base URLs
+
+Codex-LB exposes endpoints under two main URL paths:
+
+### OpenAI-Compatible API (v1)
+
+```
+http://localhost:8000/v1
+```
+
+This path provides OpenAI SDK-compatible endpoints:
+- `/v1/chat/completions` - Chat completions (streaming and non-streaming)
+- `/v1/responses` - Responses endpoint with streaming support
+- `/v1/responses/compact` - Compact responses format
+- `/v1/models` - List available models
+- `/v1/audio/transcriptions` - Audio transcription
+
+### Codex Backend API
+
+```
+http://localhost:8000/backend-api/codex
+```
+
+This path provides Codex-specific endpoints:
+- `/backend-api/codex/responses` - Streaming responses
+- `/backend-api/codex/responses/compact` - Compact responses
+- `/backend-api/codex/models` - List available models
+- `/backend-api/transcribe` - Audio transcription
+
+### Usage API
+
+```
+http://localhost:8000/api/codex/usage
+```
+
+This endpoint provides usage and rate limit information. It uses a different authentication mechanism (ChatGPT token + account ID) rather than API keys.
+
+## API Version
+
+The API version is reflected in the URL path. The current version is:
+
+- **v1** - OpenAI-compatible endpoints
+- **backend-api** - Codex-specific endpoints (unversioned)
+
+The application version is `0.1.0` (defined in app/main.py:59).
+
+## Upstream Configuration
+
+Codex-LB proxies requests to OpenAI's backend:
+
+- **Upstream Base URL**: `https://chatgpt.com/backend-api` (configurable via `CODEX_LB_upstream_base_url`)
+- **Auth Base URL**: `https://auth.openai.com` (configurable via `CODEX_LB_auth_base_url`)
+- **Connect Timeout**: 30 seconds (configurable via `CODEX_LB_upstream_connect_timeout_seconds`)
+- **Stream Idle Timeout**: 300 seconds (configurable via `CODEX_LB_stream_idle_timeout_seconds`)
+
+## Response Format
+
+All API responses follow the OpenAI error envelope format, ensuring compatibility with existing OpenAI SDK clients.
+
+### Success Response
+
+Successful responses return appropriate status codes (200, 201, etc.) with JSON or Server-Sent Events (SSE) content depending on the endpoint.
+
+### Error Response
+
+Errors follow the OpenAI error envelope format:
+
+```json
+{
+  "error": {
+    "message": "Error description",
+    "type": "error_type",
+    "code": "error_code",
+    "param": "parameter_name"
+  }
+}
+```
+
+See [Error Handling](/api/error-handling) for detailed information about error types and codes.
+
+## Rate Limiting
+
+All API endpoints include rate limit information in response headers:
+
+```
+Cache-Control: no-cache
+```
+
+Rate limit details are available through the `/api/codex/usage` endpoint, which returns:
+
+- Current usage across all limits
+- Reset timestamps for each limit window
+- Per-model usage breakdown
+
+API key-based rate limiting supports:
+- **Request-based limits** - Maximum number of requests per time window
+- **Token-based limits** - Input, output, or total token limits
+- **Cost-based limits** - Maximum spend in USD per time window
+- **Time windows** - Daily, weekly, or monthly limits
+- **Model-specific limits** - Per-model or global limits
+
+## Model Support
+
+The API automatically fetches and maintains an up-to-date model registry from the upstream service:
+
+- **Model Registry Enabled**: Yes (configurable via `CODEX_LB_model_registry_enabled`)
+- **Refresh Interval**: 300 seconds (5 minutes)
+- **Client Version**: 0.101.0 (used for model compatibility checking)
+
+Use the `/v1/models` or `/backend-api/codex/models` endpoint to retrieve the current list of available models.
+
+## Transcription Model
+
+For audio transcription endpoints, only one model is supported:
+
+- **Model**: `gpt-4o-transcribe`
+
+Requests with other model names will return a 400 error (app/modules/proxy/api.py:169-173).
+
+## Request/Response Flow
+
+1. **Authentication** - API key validated (if required)
+2. **Model Access Check** - Verify API key has access to requested model
+3. **Rate Limit Enforcement** - Check and reserve usage quota
+4. **Proxy Request** - Forward request to upstream OpenAI service
+5. **Stream Response** - Return SSE stream or collect full response
+6. **Usage Recording** - Finalize usage reservation with actual token counts
+
+## Next Steps
+
+- [Authentication](/api/authentication) - Learn about API key authentication
+- [Error Handling](/api/error-handling) - Understand error codes and formats
+- [Chat Completions](/api/chat-completions) - Start using the chat completions endpoint

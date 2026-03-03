@@ -1,0 +1,514 @@
+---
+title: 'Model Routing'
+description: 'Configure model routing strategies and account restrictions'
+icon: 'route'
+---
+
+Codex-LB intelligently routes requests to ChatGPT accounts based on availability, usage, and configured strategies. This ensures optimal load distribution and prevents individual accounts from hitting rate limits.
+
+## Routing Strategies
+
+Codex-LB supports two primary routing strategies:
+
+### Usage-Weighted Routing
+
+Routes requests to accounts based on remaining capacity.
+
+```json
+{
+  "routing_strategy": "usage_weighted"
+}
+```
+
+**How it works**:
+- Accounts with more remaining capacity receive more traffic
+- Accounts near rate limits receive less traffic
+- Weights are recalculated based on real-time usage
+
+**Best for**:
+- Maximizing throughput
+- Avoiding rate limit errors
+- Production environments with multiple accounts
+
+**Example**:
+```
+Account A: 80% remaining → 80% of traffic
+Account B: 20% remaining → 20% of traffic
+Account C: Rate limited → 0% of traffic
+```
+
+### Round-Robin Routing
+
+Distributes requests evenly across all available accounts.
+
+```json
+{
+  "routing_strategy": "round_robin"
+}
+```
+
+**How it works**:
+- Each account receives requests in rotation
+- No weighting based on usage or capacity
+- Simpler algorithm with less overhead
+
+**Best for**:
+- Testing and development
+- Accounts with similar quotas
+- Simpler deployment scenarios
+
+**Example**:
+```
+Request 1 → Account A
+Request 2 → Account B
+Request 3 → Account C
+Request 4 → Account A
+...
+```
+
+## Configuring Routing Strategy
+
+<Steps>
+  <Step title="Navigate to Settings">
+    In the Codex-LB dashboard, go to Settings.
+    
+  </Step>
+
+  <Step title="Select Routing Strategy">
+    Choose your preferred routing strategy:
+    
+    - **Usage-weighted**: Distributes traffic based on remaining capacity (recommended)
+    - **Round-robin**: Distributes traffic evenly across accounts
+  </Step>
+
+  <Step title="Save Settings">
+    Click "Save" to apply the new routing strategy. Changes take effect immediately.
+  </Step>
+</Steps>
+
+## Account Selection
+
+### Eligible Accounts
+
+For each incoming request, Codex-LB considers accounts that are:
+
+1. **Active status**: Account status is `active`
+2. **Not rate limited**: Account has not hit ChatGPT rate limits
+3. **Fresh tokens**: Access tokens are valid and not expired
+4. **Available quota**: Account has remaining usage capacity (for usage-weighted)
+
+### Account Status Impact
+
+Account status affects routing eligibility:
+
+| Status | Eligible for Routing? | Notes |
+|--------|----------------------|-------|
+| `active` | Yes | Normal operation |
+| `rate_limited` | No | Temporarily excluded until limits reset |
+| `quota_exceeded` | No | Excluded until quota resets |
+| `paused` | No | Manually paused by admin |
+| `deactivated` | No | Permanently excluded |
+
+### Account Recovery
+
+Accounts automatically recover from temporary states:
+
+- **Rate limited**: After the rate limit window expires (typically 3-60 minutes)
+- **Quota exceeded**: After the quota window resets (daily/weekly)
+- **Token expired**: After automatic token refresh
+
+## Model-Specific Restrictions
+
+You can restrict which models an API key can access using the `allowed_models` field:
+
+```json
+{
+  "name": "Limited Key",
+  "allowed_models": ["gpt-4", "gpt-4-turbo", "gpt-3.5-turbo"]
+}
+```
+
+**Behavior**:
+- Only listed models can be requested
+- Other models return `403 Forbidden`
+- Empty or `null` allows all models
+
+**Use cases**:
+- Restrict expensive models to production keys
+- Limit test keys to cheaper models
+- Enforce compliance requirements
+
+### Example Configurations
+
+#### Production Key (All Models)
+
+```json
+{
+  "name": "Production",
+  "allowed_models": null
+}
+```
+
+#### Development Key (Budget Models)
+
+```json
+{
+  "name": "Development",
+  "allowed_models": ["gpt-3.5-turbo", "gpt-4o-mini"]
+}
+```
+
+#### Premium Key (Latest Models)
+
+```json
+{
+  "name": "Premium",
+  "allowed_models": ["gpt-4", "gpt-4-turbo", "o1-preview", "o1-mini"]
+}
+```
+
+## Sticky Sessions
+
+Sticky sessions ensure that requests with the same `prompt_cache_key` are routed to the same account.
+
+```json
+{
+  "sticky_threads_enabled": true
+}
+```
+
+**How it works**:
+- Requests with the same `prompt_cache_key` are routed to the same account
+- Improves prompt caching efficiency
+- Reduces latency for multi-turn conversations
+
+**Enable via**:
+- Dashboard Settings → "Sticky threads"
+- Pass `prompt_cache_key` in requests
+
+**Example request**:
+```json
+{
+  "model": "gpt-4",
+  "messages": [...],
+  "prompt_cache_key": "conversation-123"
+}
+```
+
+**Benefits**:
+- Better prompt cache hit rates
+- Lower costs for cached tokens
+- Consistent experience for multi-turn conversations
+
+**Limitations**:
+- If the sticky account becomes unavailable, requests are routed to another account
+- Sticky sessions are reallocated if the account status changes
+
+## Account Preferences
+
+### Prefer Earlier Reset Accounts
+
+```json
+{
+  "prefer_earlier_reset_accounts": true
+}
+```
+
+**How it works**:
+- Prioritizes accounts that will reset sooner
+- Helps distribute usage across reset windows
+- Reduces risk of all accounts hitting limits simultaneously
+
+**Example**:
+```
+Account A: Resets in 2 hours
+Account B: Resets in 20 hours
+Account C: Resets in 10 hours
+
+Routing preference: A > C > B
+```
+
+**Best for**:
+- Managing accounts with different reset times
+- Smoothing out traffic patterns
+- Preventing simultaneous rate limit errors
+
+## Load Balancer Behavior
+
+### Selection Algorithm
+
+<Steps>
+  <Step title="Filter Accounts">
+    Identify accounts that are:
+    - Active status
+    - Not rate limited or quota exceeded
+    - Not paused or deactivated
+    - Have valid, unexpired tokens
+  </Step>
+
+  <Step title="Check Sticky Session">
+    If sticky sessions are enabled and a `prompt_cache_key` is provided:
+    - Check if a sticky session exists for this key
+    - If yes, prefer that account (if available)
+    - If account unavailable, reallocate to another account
+  </Step>
+
+  <Step title="Apply Routing Strategy">
+    **Usage-weighted**:
+    - Calculate remaining capacity for each account
+    - Weight selection probability by remaining capacity
+    - Accounts with more capacity are more likely to be selected
+    
+    **Round-robin**:
+    - Select next account in rotation
+    - Skip unavailable accounts
+    - Continue rotation from last selected account
+  </Step>
+
+  <Step title="Apply Preferences">
+    If "prefer earlier reset" is enabled:
+    - Sort accounts by reset time
+    - Prefer accounts that reset sooner
+  </Step>
+
+  <Step title="Select Account">
+    Choose the best account based on strategy and preferences.
+    
+    If no accounts are available, return `503 Service Unavailable`.
+  </Step>
+</Steps>
+
+### Retry Logic
+
+If a request fails, Codex-LB automatically retries with a different account:
+
+<Steps>
+  <Step title="Detect Failure">
+    Request fails due to:
+    - Rate limit error (429)
+    - Quota exceeded error (403)
+    - Token expiration (401)
+    - Network error
+  </Step>
+
+  <Step title="Mark Account Status">
+    Update account status based on error:
+    - `rate_limit_exceeded` → `rate_limited`
+    - `quota_exceeded` → `quota_exceeded`
+    - `insufficient_quota` → `quota_exceeded`
+    - Token errors → `deactivated` (if permanent)
+  </Step>
+
+  <Step title="Select New Account">
+    Run selection algorithm again, excluding the failed account.
+  </Step>
+
+  <Step title="Retry Request">
+    Retry the request with the new account.
+    
+    **Max retries**: 3 attempts
+  </Step>
+</Steps>
+
+## Error Handling
+
+### No Available Accounts
+
+```json
+{
+  "error": {
+    "code": "no_accounts",
+    "message": "No active accounts available",
+    "type": "server_error"
+  }
+}
+```
+
+**HTTP Status**: `503 Service Unavailable`
+
+**Causes**:
+- All accounts are rate limited or quota exceeded
+- All accounts are paused or deactivated
+- No accounts added to the load balancer
+- All accounts have expired or invalid tokens
+
+**Solution**:
+1. Check account status in the dashboard
+2. Wait for rate limits to reset
+3. Add more accounts to increase capacity
+4. Reactivate paused accounts
+
+### Model Not Allowed
+
+```json
+{
+  "error": {
+    "code": "model_not_allowed",
+    "message": "Model 'gpt-4' is not allowed for this API key",
+    "type": "invalid_request_error"
+  }
+}
+```
+
+**HTTP Status**: `403 Forbidden`
+
+**Cause**: Requested model not in API key's `allowed_models` list.
+
+**Solution**: Update the API key's `allowed_models` or use a different model.
+
+### Rate Limit Propagation
+
+When an account hits a rate limit:
+
+1. Account status changes to `rate_limited`
+2. Account is excluded from routing
+3. Error details are recorded:
+   - Error code (e.g., `rate_limit_exceeded`)
+   - Error message from ChatGPT
+   - Timestamp of failure
+4. Account automatically recovers after the rate limit window
+
+## Monitoring
+
+### Account Status
+
+Monitor account status in the dashboard:
+
+
+- **Active**: Available for routing
+- **Rate limited**: Temporarily unavailable
+- **Quota exceeded**: Quota exhausted
+- **Paused**: Manually disabled
+- **Deactivated**: Permanently disabled
+
+### Usage Metrics
+
+Track usage across accounts:
+
+- **Total requests**: Number of requests routed to each account
+- **Token usage**: Input/output/cached tokens per account
+- **Error rate**: Percentage of failed requests per account
+- **Remaining capacity**: Available quota for each account
+
+### Rate Limit Headers
+
+Response headers show account-level rate limits:
+
+```http
+X-ChatGPT-RateLimit-Limit-Primary: 10000
+X-ChatGPT-RateLimit-Remaining-Primary: 7543
+X-ChatGPT-RateLimit-Reset-Primary: 1709539200
+```
+
+**Primary**: Main rate limit (requests or tokens per time window)
+**Secondary**: Secondary rate limit (if applicable)
+
+See [API Reference](/api-reference/response-headers) for full header documentation.
+
+## Best Practices
+
+### Account Management
+
+- **Multiple accounts**: Add multiple accounts to increase capacity and reliability
+- **Diverse reset times**: Add accounts at different times to stagger reset windows
+- **Monitor status**: Check account status regularly and reactivate as needed
+- **Remove inactive**: Delete deactivated accounts to reduce noise
+
+### Routing Strategy
+
+- **Production**: Use `usage_weighted` for optimal load distribution
+- **Development**: Use `round_robin` for simplicity
+- **Sticky sessions**: Enable for applications with prompt caching
+- **Prefer earlier reset**: Enable for smoother traffic distribution
+
+### Model Restrictions
+
+- **Budget control**: Restrict expensive models to production keys
+- **Testing**: Use cheaper models for development and testing
+- **Compliance**: Enforce model restrictions for regulatory requirements
+
+### Error Handling
+
+- **Implement retries**: Client applications should retry on `503` errors
+- **Exponential backoff**: Use exponential backoff for retries
+- **Fallback logic**: Have fallback behavior when all accounts are unavailable
+- **Monitor alerts**: Set up alerts for "no available accounts" errors
+
+## Advanced Configuration
+
+### Custom Routing Logic
+
+While Codex-LB provides built-in routing strategies, you can implement custom logic by:
+
+1. Monitoring account status via API
+2. Distributing requests across multiple Codex-LB instances
+3. Using external load balancers with health checks
+
+### Account Pools
+
+Organize accounts into pools for different use cases:
+
+- **Pool A**: High-quota accounts for production
+- **Pool B**: Lower-quota accounts for development
+- **Pool C**: Specific accounts for certain models
+
+Implement by deploying multiple Codex-LB instances with different account sets.
+
+### Geographic Distribution
+
+Distribute accounts across regions for lower latency:
+
+1. Deploy Codex-LB instances in multiple regions
+2. Add accounts with tokens from the same region
+3. Route requests to the nearest instance
+
+## Troubleshooting
+
+### Uneven traffic distribution
+
+**Cause**: Some accounts have much more capacity than others.
+
+**Solution**:
+- Use `usage_weighted` routing to automatically balance based on capacity
+- Add more accounts with similar quotas
+- Enable "prefer earlier reset" to distribute across reset windows
+
+### Sticky sessions not working
+
+**Cause**: `sticky_threads_enabled` is disabled or `prompt_cache_key` is not provided.
+
+**Solution**:
+1. Enable sticky threads in settings
+2. Pass `prompt_cache_key` in request body
+3. Verify key is consistent across related requests
+
+### Accounts frequently rate limited
+
+**Cause**: Not enough accounts for the request volume.
+
+**Solution**:
+- Add more accounts to increase total capacity
+- Implement client-side rate limiting
+- Use API key rate limits to control usage
+- Monitor usage patterns and adjust
+
+### Request fails even with available accounts
+
+**Cause**: Model restrictions, API key limits, or network errors.
+
+**Solution**:
+1. Check API key `allowed_models` configuration
+2. Verify API key rate limits
+3. Check Codex-LB logs for detailed error messages
+4. Test with a simple request to isolate the issue
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Troubleshooting" icon="wrench" href="/guides/troubleshooting">
+    Diagnose and resolve common issues
+  </Card>
+  <Card title="API Reference" icon="code" href="/api-reference/introduction">
+    Explore the complete API documentation
+  </Card>
+</CardGroup>

@@ -1,0 +1,391 @@
+---
+title: 'Codex Usage'
+description: 'Get current usage and rate limit status'
+---
+
+## Overview
+
+The usage endpoint provides real-time information about your current rate limit status, quota usage, and credit balance. This endpoint uses ChatGPT session authentication instead of API keys.
+
+## Endpoint
+
+### GET /api/codex/usage
+
+Retrieves usage statistics and rate limit information for the authenticated account.
+
+**Base URL:** `https://your-codex-lb-instance.com`
+
+#### Query Parameters
+
+None.
+
+#### Headers
+
+<ParamField header="Authorization" type="string" required>
+  Bearer token from ChatGPT session (e.g., `Bearer chatgpt-access-token`)
+</ParamField>
+
+<ParamField header="chatgpt-account-id" type="string" required>
+  ChatGPT workspace/account ID
+</ParamField>
+
+#### Response
+
+<ResponseField name="plan_type" type="string">
+  Account plan type (e.g., `plus`, `team`, `enterprise`)
+</ResponseField>
+
+<ResponseField name="rate_limit" type="object">
+  Rate limit status information
+  
+  <Expandable title="Rate Limit Properties">
+    <ResponseField name="allowed" type="boolean">
+      Whether new requests are currently allowed
+    </ResponseField>
+    
+    <ResponseField name="limit_reached" type="boolean">
+      Whether the rate limit has been reached
+    </ResponseField>
+    
+    <ResponseField name="primary_window" type="object">
+      Primary rate limit window (typically hourly)
+      
+      <Expandable title="Window Properties">
+        <ResponseField name="used_percent" type="integer">
+          Percentage of the limit used (0-100)
+        </ResponseField>
+        
+        <ResponseField name="limit_window_seconds" type="integer">
+          Window duration in seconds (e.g., 18000 for 5 hours)
+        </ResponseField>
+        
+        <ResponseField name="reset_after_seconds" type="integer">
+          Seconds until the window resets
+        </ResponseField>
+        
+        <ResponseField name="reset_at" type="integer">
+          Unix timestamp when the window resets
+        </ResponseField>
+      </Expandable>
+    </ResponseField>
+    
+    <ResponseField name="secondary_window" type="object">
+      Secondary rate limit window (typically weekly)
+      
+      <Expandable title="Window Properties">
+        <ResponseField name="used_percent" type="integer">
+          Percentage of the limit used (0-100)
+        </ResponseField>
+        
+        <ResponseField name="limit_window_seconds" type="integer">
+          Window duration in seconds (e.g., 604800 for 7 days)
+        </ResponseField>
+        
+        <ResponseField name="reset_after_seconds" type="integer">
+          Seconds until the window resets
+        </ResponseField>
+        
+        <ResponseField name="reset_at" type="integer">
+          Unix timestamp when the window resets
+        </ResponseField>
+      </Expandable>
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="credits" type="object">
+  Credit balance information (if applicable)
+  
+  <Expandable title="Credits Properties">
+    <ResponseField name="has_credits" type="boolean">
+      Whether the account has credits available
+    </ResponseField>
+    
+    <ResponseField name="unlimited" type="boolean">
+      Whether the account has unlimited credits
+    </ResponseField>
+    
+    <ResponseField name="balance" type="string">
+      Current credit balance as a decimal string (e.g., `"15.0"`)
+    </ResponseField>
+    
+    <ResponseField name="approx_local_messages" type="array">
+      Estimated message capacity for local models
+    </ResponseField>
+    
+    <ResponseField name="approx_cloud_messages" type="array">
+      Estimated message capacity for cloud models
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+#### Example Response
+
+```json
+{
+  "plan_type": "plus",
+  "rate_limit": {
+    "allowed": true,
+    "limit_reached": false,
+    "primary_window": {
+      "used_percent": 20,
+      "limit_window_seconds": 18000,
+      "reset_after_seconds": 14400,
+      "reset_at": 1704081600
+    },
+    "secondary_window": {
+      "used_percent": 50,
+      "limit_window_seconds": 604800,
+      "reset_after_seconds": 432000,
+      "reset_at": 1704499200
+    }
+  },
+  "credits": {
+    "has_credits": true,
+    "unlimited": false,
+    "balance": "15.0",
+    "approx_local_messages": null,
+    "approx_cloud_messages": null
+  }
+}
+```
+
+#### Example Request
+
+<CodeGroup>
+
+```bash curl
+curl -X GET https://your-codex-lb-instance.com/api/codex/usage \
+  -H "Authorization: Bearer chatgpt-access-token" \
+  -H "chatgpt-account-id: workspace_abc123"
+```
+
+```python Python
+import requests
+
+url = "https://your-codex-lb-instance.com/api/codex/usage"
+headers = {
+    "Authorization": "Bearer chatgpt-access-token",
+    "chatgpt-account-id": "workspace_abc123"
+}
+
+response = requests.get(url, headers=headers)
+usage = response.json()
+
+print(f"Plan: {usage['plan_type']}")
+print(f"\nRate Limit Status:")
+print(f"  Allowed: {usage['rate_limit']['allowed']}")
+
+if usage['rate_limit']['primary_window']:
+    primary = usage['rate_limit']['primary_window']
+    print(f"  Primary: {primary['used_percent']}% used")
+    print(f"  Resets in: {primary['reset_after_seconds']} seconds")
+
+if usage['rate_limit']['secondary_window']:
+    secondary = usage['rate_limit']['secondary_window']
+    print(f"  Secondary: {secondary['used_percent']}% used")
+    print(f"  Resets in: {secondary['reset_after_seconds']} seconds")
+
+if usage.get('credits'):
+    credits = usage['credits']
+    print(f"\nCredits:")
+    print(f"  Has credits: {credits['has_credits']}")
+    if credits.get('balance'):
+        print(f"  Balance: ${credits['balance']}")
+```
+
+```javascript JavaScript
+const response = await fetch('https://your-codex-lb-instance.com/api/codex/usage', {
+  method: 'GET',
+  headers: {
+    'Authorization': 'Bearer chatgpt-access-token',
+    'chatgpt-account-id': 'workspace_abc123'
+  }
+});
+
+const usage = await response.json();
+
+console.log(`Plan: ${usage.plan_type}`);
+console.log('\nRate Limit Status:');
+console.log(`  Allowed: ${usage.rate_limit.allowed}`);
+
+if (usage.rate_limit.primary_window) {
+  const primary = usage.rate_limit.primary_window;
+  console.log(`  Primary: ${primary.used_percent}% used`);
+  console.log(`  Resets in: ${primary.reset_after_seconds} seconds`);
+}
+
+if (usage.rate_limit.secondary_window) {
+  const secondary = usage.rate_limit.secondary_window;
+  console.log(`  Secondary: ${secondary.used_percent}% used`);
+  console.log(`  Resets in: ${secondary.reset_after_seconds} seconds`);
+}
+
+if (usage.credits) {
+  console.log('\nCredits:');
+  console.log(`  Has credits: ${usage.credits.has_credits}`);
+  if (usage.credits.balance) {
+    console.log(`  Balance: $${usage.credits.balance}`);
+  }
+}
+```
+
+</CodeGroup>
+
+## Authentication
+
+This endpoint uses **ChatGPT session authentication**, not API keys. You must provide:
+
+1. An `Authorization` header with a valid ChatGPT access token
+2. A `chatgpt-account-id` header with your workspace/account ID
+
+These credentials can be obtained from your ChatGPT web session.
+
+## Rate Limit Windows
+
+### Primary Window
+
+Typically a 5-hour rolling window (18000 seconds). This is the main rate limit that applies to most API usage.
+
+### Secondary Window
+
+Typically a 7-day rolling window (604800 seconds). This provides additional capacity for burst usage while maintaining weekly limits.
+
+### Window Selection
+
+The API returns both windows when available. If only one window is active (e.g., weekly-only limits), the other will be `null`.
+
+## Usage Monitoring
+
+### Interpreting Usage Percentages
+
+- `0-50%` - Normal usage, plenty of capacity
+- `51-80%` - Moderate usage, monitor if making many requests
+- `81-99%` - High usage, consider throttling requests
+- `100%` - Limit reached, requests will be rejected until reset
+
+### Planning Based on Reset Times
+
+```python
+import time
+
+def wait_for_reset(usage_data):
+    """Wait until the rate limit resets"""
+    if usage_data['rate_limit']['primary_window']:
+        reset_seconds = usage_data['rate_limit']['primary_window']['reset_after_seconds']
+        reset_time = time.time() + reset_seconds
+        
+        print(f"Rate limit resets in {reset_seconds} seconds")
+        print(f"Reset time: {time.ctime(reset_time)}")
+        
+        return reset_seconds
+    return 0
+```
+
+## Credits
+
+For accounts with credit-based billing:
+
+- `has_credits: true` - Account can make requests
+- `has_credits: false` - Account is out of credits
+- `unlimited: true` - Account has unlimited credits (enterprise plans)
+- `balance` - Current credit balance in USD
+
+## Error Handling
+
+### 401 Unauthorized
+
+Invalid or expired access token:
+
+```json
+{
+  "error": {
+    "message": "Invalid authentication credentials",
+    "type": "authentication_error",
+    "code": "invalid_credentials"
+  }
+}
+```
+
+### 403 Forbidden
+
+Missing or invalid `chatgpt-account-id` header:
+
+```json
+{
+  "error": {
+    "message": "Account ID is required",
+    "type": "invalid_request_error",
+    "code": "missing_account_id"
+  }
+}
+```
+
+## Use Cases
+
+### Pre-Request Validation
+
+Check usage before making requests to avoid hitting rate limits:
+
+```python
+def can_make_request(api_base, access_token, account_id, threshold=90):
+    """Check if we're below the rate limit threshold"""
+    response = requests.get(
+        f"{api_base}/api/codex/usage",
+        headers={
+            "Authorization": f"Bearer {access_token}",
+            "chatgpt-account-id": account_id
+        }
+    )
+    usage = response.json()
+    
+    if not usage['rate_limit']['allowed']:
+        return False
+    
+    # Check primary window
+    if usage['rate_limit']['primary_window']:
+        if usage['rate_limit']['primary_window']['used_percent'] >= threshold:
+            return False
+    
+    return True
+
+if can_make_request("https://your-instance.com", token, account_id):
+    # Make your API request
+    pass
+else:
+    print("Rate limit too high, waiting...")
+```
+
+### Dashboard Display
+
+Display usage information in your application:
+
+```javascript
+async function displayUsageStats(apiBase, accessToken, accountId) {
+  const response = await fetch(`${apiBase}/api/codex/usage`, {
+    headers: {
+      'Authorization': `Bearer ${accessToken}`,
+      'chatgpt-account-id': accountId
+    }
+  });
+  
+  const usage = await response.json();
+  
+  return {
+    plan: usage.plan_type,
+    primaryUsage: usage.rate_limit.primary_window?.used_percent || 0,
+    secondaryUsage: usage.rate_limit.secondary_window?.used_percent || 0,
+    creditsAvailable: usage.credits?.has_credits || false,
+    balance: usage.credits?.balance || '0'
+  };
+}
+```
+
+## Notes
+
+- Usage data is aggregated across all accounts in your Codex-LB pool
+- The endpoint returns the most recent usage data from the last refresh cycle
+- Both primary and secondary windows may not always be present
+- For weekly-only plans, `primary_window` will be `null` and `secondary_window` contains the weekly limit
+- Usage percentages are calculated based on the upstream provider's limits
+- This endpoint does not count against your rate limit

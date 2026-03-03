@@ -1,0 +1,402 @@
+---
+title: 'List Models'
+api: 'GET /v1/models'
+description: 'Retrieve the list of available models'
+---
+
+## Overview
+
+The `/v1/models` endpoint returns a list of models available to your API key. The response is filtered based on your API key's `allowed_models` configuration if present.
+
+This endpoint is useful for:
+- Discovering available models before making requests
+- Checking model capabilities and metadata
+- Validating model access for your API key
+- Understanding model restrictions and features
+
+## Authentication
+
+<ParamField header="Authorization" type="string" required>
+  Bearer token for API authentication. Format: `Bearer YOUR_API_KEY`
+</ParamField>
+
+## Response
+
+Returns a list of model objects.
+
+<ResponseField name="object" type="string">
+  Always `"list"`.
+</ResponseField>
+
+<ResponseField name="data" type="array">
+  Array of model objects. Each model object contains:
+</ResponseField>
+
+### Model Object
+
+<ResponseField name="id" type="string">
+  Model identifier (slug). Use this value in the `model` parameter for completions.
+  
+  Examples: `"gpt-4.1"`, `"gpt-5.2"`, `"o3-pro"`
+</ResponseField>
+
+<ResponseField name="object" type="string">
+  Always `"model"`.
+</ResponseField>
+
+<ResponseField name="created" type="integer">
+  Unix timestamp when the model list was generated.
+</ResponseField>
+
+<ResponseField name="owned_by" type="string">
+  Owner identifier. Always `"codex-lb"`.
+</ResponseField>
+
+<ResponseField name="metadata" type="object">
+  Extended model metadata with capabilities and configuration.
+</ResponseField>
+
+### Model Metadata
+
+<ResponseField name="metadata.display_name" type="string">
+  Human-readable model name.
+  
+  Example: `"GPT-4.1 Turbo"`, `"O3 Pro"`
+</ResponseField>
+
+<ResponseField name="metadata.description" type="string">
+  Model description explaining capabilities and use cases.
+</ResponseField>
+
+<ResponseField name="metadata.context_window" type="integer">
+  Maximum context window size in tokens.
+  
+  Example: `128000`, `200000`
+</ResponseField>
+
+<ResponseField name="metadata.input_modalities" type="array">
+  Supported input modalities.
+  
+  Possible values:
+  - `"text"`: Text input
+  - `"image"`: Image input
+  - `"audio"`: Audio input
+  - `"video"`: Video input
+</ResponseField>
+
+<ResponseField name="metadata.supported_reasoning_levels" type="array">
+  Available reasoning effort levels for this model.
+  
+  Each level object contains:
+  - `effort` (string): Effort level identifier (e.g., `"low"`, `"medium"`, `"high"`)
+  - `description` (string): Description of the reasoning level
+</ResponseField>
+
+<ResponseField name="metadata.default_reasoning_level" type="string | null">
+  Default reasoning effort level when not specified.
+  
+  Example: `"medium"`
+</ResponseField>
+
+<ResponseField name="metadata.supports_reasoning_summaries" type="boolean" default={false}>
+  Whether the model supports reasoning summaries.
+</ResponseField>
+
+<ResponseField name="metadata.support_verbosity" type="boolean" default={false}>
+  Whether the model supports verbosity control.
+</ResponseField>
+
+<ResponseField name="metadata.default_verbosity" type="string | null">
+  Default verbosity level when not specified.
+  
+  Example: `"normal"`, `"concise"`
+</ResponseField>
+
+<ResponseField name="metadata.prefer_websockets" type="boolean" default={false}>
+  Whether the model prefers WebSocket connections for streaming.
+</ResponseField>
+
+<ResponseField name="metadata.supports_parallel_tool_calls" type="boolean" default={false}>
+  Whether the model supports calling multiple tools in parallel.
+</ResponseField>
+
+<ResponseField name="metadata.supported_in_api" type="boolean" default={true}>
+  Whether the model is available via API endpoints.
+</ResponseField>
+
+<ResponseField name="metadata.minimal_client_version" type="string | null">
+  Minimum client version required to use this model.
+  
+  Example: `"1.2.0"`
+</ResponseField>
+
+<ResponseField name="metadata.priority" type="integer" default={0}>
+  Model priority for selection and display ordering. Higher values indicate higher priority.
+</ResponseField>
+
+## Examples
+
+### List All Available Models
+
+```bash
+curl https://api.example.com/v1/models \
+  -H "Authorization: Bearer YOUR_API_KEY"
+```
+
+### Response Example
+
+```json
+{
+  "object": "list",
+  "data": [
+    {
+      "id": "gpt-4.1",
+      "object": "model",
+      "created": 1709481600,
+      "owned_by": "codex-lb",
+      "metadata": {
+        "display_name": "GPT-4.1 Turbo",
+        "description": "Advanced language model with enhanced reasoning",
+        "context_window": 128000,
+        "input_modalities": ["text", "image"],
+        "supported_reasoning_levels": [
+          {
+            "effort": "low",
+            "description": "Fast responses with minimal reasoning"
+          },
+          {
+            "effort": "medium",
+            "description": "Balanced reasoning and speed"
+          },
+          {
+            "effort": "high",
+            "description": "Deep reasoning for complex problems"
+          }
+        ],
+        "default_reasoning_level": "medium",
+        "supports_reasoning_summaries": false,
+        "support_verbosity": true,
+        "default_verbosity": "normal",
+        "prefer_websockets": false,
+        "supports_parallel_tool_calls": true,
+        "supported_in_api": true,
+        "minimal_client_version": null,
+        "priority": 100
+      }
+    },
+    {
+      "id": "gpt-5.2",
+      "object": "model",
+      "created": 1709481600,
+      "owned_by": "codex-lb",
+      "metadata": {
+        "display_name": "GPT-5.2",
+        "description": "Next-generation model with advanced capabilities",
+        "context_window": 200000,
+        "input_modalities": ["text", "image", "audio"],
+        "supported_reasoning_levels": [
+          {
+            "effort": "low",
+            "description": "Quick responses"
+          },
+          {
+            "effort": "medium",
+            "description": "Standard reasoning"
+          },
+          {
+            "effort": "high",
+            "description": "Extended reasoning"
+          },
+          {
+            "effort": "max",
+            "description": "Maximum reasoning capability"
+          }
+        ],
+        "default_reasoning_level": "medium",
+        "supports_reasoning_summaries": true,
+        "support_verbosity": true,
+        "default_verbosity": "normal",
+        "prefer_websockets": true,
+        "supports_parallel_tool_calls": true,
+        "supported_in_api": true,
+        "minimal_client_version": "2.0.0",
+        "priority": 200
+      }
+    },
+    {
+      "id": "o3-pro",
+      "object": "model",
+      "created": 1709481600,
+      "owned_by": "codex-lb",
+      "metadata": {
+        "display_name": "O3 Pro",
+        "description": "Specialized model for complex reasoning tasks",
+        "context_window": 128000,
+        "input_modalities": ["text"],
+        "supported_reasoning_levels": [
+          {
+            "effort": "high",
+            "description": "Deep reasoning only"
+          }
+        ],
+        "default_reasoning_level": "high",
+        "supports_reasoning_summaries": true,
+        "support_verbosity": false,
+        "default_verbosity": null,
+        "prefer_websockets": false,
+        "supports_parallel_tool_calls": false,
+        "supported_in_api": true,
+        "minimal_client_version": null,
+        "priority": 150
+      }
+    }
+  ]
+}
+```
+
+## Model Filtering
+
+### API Key Restrictions
+
+If your API key has `allowed_models` configured, the response will only include those models:
+
+**API Key with restrictions:**
+```json
+{
+  "allowed_models": ["gpt-4.1", "gpt-5.2"]
+}
+```
+
+**Response (filtered):**
+```json
+{
+  "object": "list",
+  "data": [
+    {
+      "id": "gpt-4.1",
+      ...
+    },
+    {
+      "id": "gpt-5.2",
+      ...
+    }
+  ]
+}
+```
+
+Models not in your `allowed_models` list will not appear in the response.
+
+### No Restrictions
+
+If your API key has no `allowed_models` restrictions (or `allowed_models` is null/empty), all available models are returned.
+
+## Use Cases
+
+### Check Model Capabilities
+
+Use the metadata to determine if a model supports the features you need:
+
+```javascript
+const response = await fetch('https://api.example.com/v1/models', {
+  headers: { 'Authorization': 'Bearer YOUR_API_KEY' }
+});
+const { data: models } = await response.json();
+
+// Find models that support parallel tool calls
+const parallelToolModels = models.filter(
+  m => m.metadata.supports_parallel_tool_calls
+);
+
+// Find models with large context windows
+const largeContextModels = models.filter(
+  m => m.metadata.context_window >= 128000
+);
+
+// Find models that support image input
+const imageModels = models.filter(
+  m => m.metadata.input_modalities.includes('image')
+);
+```
+
+### Dynamic Model Selection
+
+Select the best model for your use case:
+
+```javascript
+// Get highest priority model
+const topModel = models.sort(
+  (a, b) => b.metadata.priority - a.metadata.priority
+)[0];
+
+// Get model with largest context window
+const largestContext = models.sort(
+  (a, b) => b.metadata.context_window - a.metadata.context_window
+)[0];
+
+// Get reasoning-capable model
+const reasoningModel = models.find(
+  m => m.metadata.supports_reasoning_summaries
+);
+```
+
+### Validate Model Access
+
+Check if you have access to a specific model:
+
+```javascript
+const hasAccess = models.some(m => m.id === 'gpt-5.2');
+
+if (!hasAccess) {
+  console.error('API key does not have access to gpt-5.2');
+}
+```
+
+## Rate Limiting
+
+The `/v1/models` endpoint is subject to the same rate limiting as other API endpoints. Each request counts toward your API key's request quota.
+
+## Empty Response
+
+If no models are available (e.g., model registry not yet loaded), the endpoint returns:
+
+```json
+{
+  "object": "list",
+  "data": []
+}
+```
+
+## Error Handling
+
+Errors return OpenAI-compatible error envelopes:
+
+```json
+{
+  "error": {
+    "message": "Invalid API key",
+    "type": "invalid_request_error",
+    "code": "invalid_api_key"
+  }
+}
+```
+
+Common error scenarios:
+- **401 Unauthorized**: Invalid or missing API key
+- **403 Forbidden**: API key lacks permission
+- **429 Too Many Requests**: Rate limit exceeded
+- **500 Internal Server Error**: Server error
+
+## Comparison with OpenAI
+
+This endpoint follows the OpenAI `/v1/models` format with the following additions:
+
+**Standard OpenAI fields:**
+- `id`, `object`, `created`, `owned_by`
+
+**Codex-LB extensions:**
+- `metadata` object with comprehensive model capabilities
+- Model filtering based on API key restrictions
+- Priority-based model ordering
+- Detailed reasoning and verbosity support information
+
+The extended metadata helps clients make informed decisions about model selection without requiring external documentation.

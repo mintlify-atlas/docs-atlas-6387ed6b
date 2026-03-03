@@ -1,0 +1,427 @@
+---
+title: OpenAI Python SDK Setup
+description: Use the OpenAI Python SDK with Codex-LB
+---
+
+The official OpenAI Python SDK works seamlessly with Codex-LB. Simply point it at Codex-LB's `/v1` endpoint to leverage account pooling and usage tracking.
+
+## Endpoint
+
+```
+http://127.0.0.1:2455/v1
+```
+
+<Note>
+  The OpenAI SDK uses the standard OpenAI-compatible `/v1` endpoint.
+</Note>
+
+## Installation
+
+Install the OpenAI Python SDK:
+
+<CodeGroup>
+```bash pip
+pip install openai
+```
+
+```bash uv
+uv pip install openai
+```
+
+```bash poetry
+poetry add openai
+```
+</CodeGroup>
+
+## Basic Usage
+
+<Tabs>
+  <Tab title="Without API Key Auth">
+    When API key authentication is **disabled** (default):
+    
+    ```python
+    from openai import OpenAI
+    
+    client = OpenAI(
+        base_url="http://127.0.0.1:2455/v1",
+        api_key="dummy",  # any string works when auth is disabled
+    )
+    
+    response = client.chat.completions.create(
+        model="gpt-5.3-codex",
+        messages=[{"role": "user", "content": "Hello!"}],
+    )
+    print(response.choices[0].message.content)
+    ```
+    
+    <Info>
+      The OpenAI SDK requires an `api_key` parameter. When auth is disabled, any string value works.
+    </Info>
+  </Tab>
+  
+  <Tab title="With API Key Auth">
+    When API key authentication is **enabled**:
+    
+    ```python
+    import os
+    from openai import OpenAI
+    
+    client = OpenAI(
+        base_url="http://127.0.0.1:2455/v1",
+        api_key=os.environ.get("CODEX_LB_API_KEY"),  # from dashboard
+    )
+    
+    response = client.chat.completions.create(
+        model="gpt-5.3-codex",
+        messages=[{"role": "user", "content": "Hello!"}],
+    )
+    print(response.choices[0].message.content)
+    ```
+    
+    Set the environment variable:
+    ```bash
+    export CODEX_LB_API_KEY="sk-clb-..."
+    python your_script.py
+    ```
+  </Tab>
+</Tabs>
+
+## Complete Example
+
+Here's a complete example with error handling:
+
+```python
+import os
+from openai import OpenAI, OpenAIError
+
+# Initialize client
+client = OpenAI(
+    base_url="http://127.0.0.1:2455/v1",
+    api_key=os.environ.get("CODEX_LB_API_KEY", "dummy"),
+)
+
+def chat(prompt: str, model: str = "gpt-5.3-codex") -> str:
+    """Send a chat completion request to Codex-LB."""
+    try:
+        response = client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": "You are a helpful assistant."},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.7,
+            max_tokens=1000,
+        )
+        return response.choices[0].message.content
+    
+    except OpenAIError as e:
+        print(f"Error: {e}")
+        return None
+
+if __name__ == "__main__":
+    result = chat("Write a hello world function in Python")
+    if result:
+        print(result)
+```
+
+## Streaming Responses
+
+Stream responses for real-time output:
+
+```python
+from openai import OpenAI
+import os
+
+client = OpenAI(
+    base_url="http://127.0.0.1:2455/v1",
+    api_key=os.environ.get("CODEX_LB_API_KEY", "dummy"),
+)
+
+stream = client.chat.completions.create(
+    model="gpt-5.3-codex",
+    messages=[{"role": "user", "content": "Write a story about AI"}],
+    stream=True,
+)
+
+for chunk in stream:
+    if chunk.choices[0].delta.content:
+        print(chunk.choices[0].delta.content, end="", flush=True)
+
+print()  # newline at end
+```
+
+## Advanced Features
+
+### Async Client
+
+Use the async client for concurrent requests:
+
+```python
+import asyncio
+import os
+from openai import AsyncOpenAI
+
+client = AsyncOpenAI(
+    base_url="http://127.0.0.1:2455/v1",
+    api_key=os.environ.get("CODEX_LB_API_KEY", "dummy"),
+)
+
+async def chat_async(prompt: str) -> str:
+    response = await client.chat.completions.create(
+        model="gpt-5.3-codex",
+        messages=[{"role": "user", "content": prompt}],
+    )
+    return response.choices[0].message.content
+
+async def main():
+    tasks = [
+        chat_async("What is Python?"),
+        chat_async("What is JavaScript?"),
+        chat_async("What is Rust?"),
+    ]
+    results = await asyncio.gather(*tasks)
+    for result in results:
+        print(result)
+        print("-" * 40)
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+### Function Calling
+
+Use function calling (tools) for structured outputs:
+
+```python
+tools = [
+    {
+        "type": "function",
+        "function": {
+            "name": "get_weather",
+            "description": "Get the current weather for a location",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "location": {
+                        "type": "string",
+                        "description": "City name, e.g. San Francisco"
+                    },
+                    "unit": {
+                        "type": "string",
+                        "enum": ["celsius", "fahrenheit"]
+                    }
+                },
+                "required": ["location"]
+            }
+        }
+    }
+]
+
+response = client.chat.completions.create(
+    model="gpt-5.3-codex",
+    messages=[{"role": "user", "content": "What's the weather in Tokyo?"}],
+    tools=tools,
+    tool_choice="auto",
+)
+
+if response.choices[0].message.tool_calls:
+    tool_call = response.choices[0].message.tool_calls[0]
+    print(f"Function: {tool_call.function.name}")
+    print(f"Arguments: {tool_call.function.arguments}")
+```
+
+### Vision (Image Input)
+
+Send images to vision-capable models:
+
+```python
+response = client.chat.completions.create(
+    model="gpt-4o",
+    messages=[
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "What's in this image?"},
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": "https://example.com/image.jpg"
+                    }
+                }
+            ]
+        }
+    ]
+)
+print(response.choices[0].message.content)
+```
+
+## Configuration Options
+
+| Parameter | Description | Default |
+|-----------|-------------|----------|
+| `base_url` | Codex-LB endpoint | Required |
+| `api_key` | API key or any string | Required |
+| `timeout` | Request timeout in seconds | 600 |
+| `max_retries` | Max retry attempts | 2 |
+| `default_headers` | Custom headers for all requests | `{}` |
+
+Example with custom config:
+
+```python
+client = OpenAI(
+    base_url="http://127.0.0.1:2455/v1",
+    api_key=os.environ.get("CODEX_LB_API_KEY", "dummy"),
+    timeout=120.0,
+    max_retries=3,
+    default_headers={"X-Custom-Header": "value"},
+)
+```
+
+## Verify Configuration
+
+Test your connection:
+
+```python
+from openai import OpenAI
+import os
+
+client = OpenAI(
+    base_url="http://127.0.0.1:2455/v1",
+    api_key=os.environ.get("CODEX_LB_API_KEY", "dummy"),
+)
+
+# List available models
+models = client.models.list()
+print("Available models:")
+for model in models.data:
+    print(f"  - {model.id}")
+
+# Test a simple completion
+response = client.chat.completions.create(
+    model="gpt-5.3-codex",
+    messages=[{"role": "user", "content": "Hello!"}],
+)
+print(f"\nResponse: {response.choices[0].message.content}")
+```
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Error: Connection refused">
+    Ensure Codex-LB is running:
+    
+    ```bash
+    curl http://127.0.0.1:2455/v1/models
+    ```
+    
+    If using Docker:
+    ```bash
+    docker ps | grep codex-lb
+    docker logs codex-lb
+    ```
+  </Accordion>
+  
+  <Accordion title="Error: 401 Unauthorized">
+    API key auth is enabled but your key is missing or invalid:
+    
+    ```python
+    # Check if the environment variable is set
+    import os
+    print(os.environ.get("CODEX_LB_API_KEY"))
+    ```
+    
+    1. Verify the key is valid in the dashboard
+    2. Ensure you're reading from the correct environment variable
+    3. Check the key hasn't expired
+  </Accordion>
+  
+  <Accordion title="Error: Model not found">
+    The requested model isn't available:
+    
+    ```python
+    # List available models
+    models = client.models.list()
+    for model in models.data:
+        print(model.id)
+    ```
+    
+    1. Verify the model ID matches exactly (case-sensitive)
+    2. Ensure at least one account supports the model
+    3. Check model sync in dashboard settings
+  </Accordion>
+  
+  <Accordion title="Timeout errors">
+    Increase the timeout for long-running requests:
+    
+    ```python
+    client = OpenAI(
+        base_url="http://127.0.0.1:2455/v1",
+        api_key=os.environ.get("CODEX_LB_API_KEY", "dummy"),
+        timeout=300.0,  # 5 minutes
+    )
+    ```
+  </Accordion>
+  
+  <Accordion title="Rate limit errors">
+    You're hitting rate limits:
+    
+    1. Check your API key limits in the dashboard
+    2. Implement exponential backoff:
+       ```python
+       from openai import OpenAI
+       import time
+       
+       def chat_with_retry(prompt, max_retries=3):
+           for attempt in range(max_retries):
+               try:
+                   return client.chat.completions.create(
+                       model="gpt-5.3-codex",
+                       messages=[{"role": "user", "content": prompt}],
+                   )
+               except Exception as e:
+                   if "rate_limit" in str(e).lower():
+                       wait = 2 ** attempt
+                       print(f"Rate limited, waiting {wait}s...")
+                       time.sleep(wait)
+                   else:
+                       raise
+       ```
+    3. Add more accounts to the pool
+  </Accordion>
+</AccordionGroup>
+
+## Remote Access
+
+If Codex-LB is running on a different machine:
+
+```python
+client = OpenAI(
+    base_url="https://your-server.com/v1",
+    api_key=os.environ.get("CODEX_LB_API_KEY"),
+)
+```
+
+<Warning>
+  When exposing Codex-LB remotely:
+  - **Always** enable API key authentication
+  - Use HTTPS with a reverse proxy (nginx, Caddy)
+  - Configure firewall rules to restrict access
+  - See [Production Deployment](/deployment/production)
+</Warning>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="API Keys" icon="key" href="/guides/managing-api-keys">
+    Create and manage API keys for authentication
+  </Card>
+  <Card title="Rate Limiting" icon="gauge" href="/guides/rate-limiting">
+    Configure rate limits per key or account
+  </Card>
+  <Card title="Chat Completions API" icon="messages" href="/api/chat-completions">
+    Full API reference for `/v1/chat/completions`
+  </Card>
+  <Card title="Usage Tracking" icon="chart-line" href="/features/usage-tracking">
+    Monitor SDK usage in the dashboard
+  </Card>
+</CardGroup>

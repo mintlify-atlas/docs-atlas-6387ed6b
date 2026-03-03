@@ -1,0 +1,317 @@
+---
+title: Load Balancing Strategies
+description: Configure how Codex-LB distributes requests across your account pool
+---
+
+## Overview
+
+Codex-LB supports multiple load balancing strategies to distribute requests across your pooled accounts. The strategy you choose affects throughput, fairness, and quota utilization.
+
+## Available Strategies
+
+### Usage-Weighted (Default)
+
+The `usage_weighted` strategy prioritizes accounts with the lowest usage percentage, ensuring even distribution of quota consumption.
+
+**How it works:**
+
+1. Calculates current usage percentage for each account
+2. Sorts accounts by: secondary usage → primary usage → last selected time
+3. Selects the account with the lowest combined usage
+
+```python
+# From app/core/balancer/logic.py:110-114
+def _usage_sort_key(state: AccountState) -> tuple[float, float, float, str]:
+    primary_used = state.used_percent if state.used_percent is not None else 0.0
+    secondary_used = state.secondary_used_percent if state.secondary_used_percent is not None else primary_used
+    last_selected = state.last_selected_at or 0.0
+    return secondary_used, primary_used, last_selected, state.account_id
+```
+
+**Use cases:**
+
+- **Default for most deployments** - Balances load fairly across all accounts
+- **Quota-conscious workloads** - Prevents early exhaustion of any single account
+- **Heterogeneous account mix** - Works well with different plan types (Plus, Team, Enterprise)
+
+**Example:** With 3 accounts at 20%, 35%, and 60% usage, requests prioritize the 20% account first.
+
+<Note>
+Usage percentages are calculated from ChatGPT's own rate limit windows (typically 5-minute sliding windows for rate limits and weekly/monthly windows for quotas).
+</Note>
+
+### Round-Robin
+
+The `round_robin` strategy rotates through accounts sequentially, selecting the least recently used account.
+
+**How it works:**
+
+1. Tracks `last_selected_at` timestamp for each account
+2. Sorts accounts by selection time (oldest first)
+3. Selects the account that was used longest ago
+
+```python
+# From app/core/balancer/logic.py:126-128
+def _round_robin_sort_key(state: AccountState) -> tuple[float, str]:
+    # Pick the least recently selected account, then stabilize by account_id.
+    return state.last_selected_at or 0.0, state.account_id
+```
+
+**Use cases:**
+
+- **Testing and validation** - Predictable distribution for debugging
+- **Uniform account types** - When all accounts have identical quotas
+- **Low-utilization scenarios** - When usage tracking overhead isn't needed
+
+**Example:** With 3 accounts last used at 10:00, 10:05, and 10:10, the next request goes to the 10:00 account.
+
+<Warning>
+Round-robin ignores usage percentages and can exhaust high-traffic accounts while leaving others idle. Only use this strategy when accounts have similar capacity and traffic patterns.
+</Warning>
+
+## Configuring Strategy
+
+### Via Dashboard
+
+1. Navigate to **Settings** tab
+2. Find **Load Balancing** section
+3. Select routing strategy from dropdown:
+   - `usage_weighted` (recommended)
+   - `round_robin`
+4. Click **Save Changes**
+
+### Via API
+
+```bash
+curl -X PUT http://localhost:8000/api/settings \
+  -H "Content-Type: application/json" \
+  -d '{
+    "routing_strategy": "usage_weighted"
+  }'
+```
+
+### Via Database
+
+The strategy is stored in the `dashboard_settings` table:
+
+```sql
+UPDATE dashboard_settings 
+SET routing_strategy = 'round_robin' 
+WHERE id = 1;
+```
+
+## Advanced Options
+
+### Prefer Earlier Reset Accounts
+
+When enabled, this option adds an additional sorting dimension to prioritize accounts that will reset soonest.
+
+**How it works:**
+
+```python
+# From app/core/balancer/logic.py:116-124
+def _reset_first_sort_key(state: AccountState) -> tuple[int, float, float, float, str]:
+    reset_bucket_days = UNKNOWN_RESET_BUCKET_DAYS
+    if state.secondary_reset_at is not None:
+        reset_bucket_days = max(
+            0,
+            int((state.secondary_reset_at - current) // SECONDS_PER_DAY),
+        )
+    secondary_used, primary_used, last_selected, account_id = _usage_sort_key(state)
+    return reset_bucket_days, secondary_used, primary_used, last_selected, account_id
+```
+
+**Effect:**
+
+- Groups accounts by days until reset (bucketed)
+- Within each bucket, applies usage-weighted sorting
+- Prefers accounts resetting in 1 day over those resetting in 7 days
+
+**Use case:** Maximize long-term availability by exhausting soon-to-reset accounts before far-away resets.
+
+**Configuration:**
+
+```bash
+curl -X PUT http://localhost:8000/api/settings \
+  -H "Content-Type: application/json" \
+  -d '{
+    "prefer_earlier_reset_accounts": true
+  }'
+```
+
+<Tip>
+Enable "Prefer earlier reset" if you frequently hit quota limits. This ensures you use accounts that are about to reset, preserving capacity in accounts with longer reset windows.
+</Tip>
+
+### Sticky Sessions
+
+Sticky sessions bind a conversation thread to a specific account, ensuring continuity.
+
+**Configuration:**
+
+```bash
+curl -X PUT http://localhost:8000/api/settings \
+  -H "Content-Type: application/json" \
+  -d '{
+    "sticky_threads_enabled": true
+  }'
+```
+
+**Behavior:**
+
+- Sticky key is derived from `chatgpt-conversation-id` header
+- First request in conversation selects account using configured strategy
+- Subsequent requests in same conversation reuse the same account
+- If pinned account becomes unavailable, a new account is selected
+
+<Note>
+Sticky sessions are stored in the `sticky_sessions` table and survive server restarts.
+</Note>
+
+## Selection Algorithm
+
+The complete selection algorithm (from `app/core/balancer/logic.py:45-134`):
+
+```python
+def select_account(
+    states: Iterable[AccountState],
+    now: float | None = None,
+    *,
+    prefer_earlier_reset: bool = False,
+    routing_strategy: RoutingStrategy = "usage_weighted",
+) -> SelectionResult:
+    current = now or time.time()
+    available: list[AccountState] = []
+
+    # 1. Filter to available accounts
+    for state in all_states:
+        if state.status == AccountStatus.DEACTIVATED:
+            continue
+        if state.status == AccountStatus.PAUSED:
+            continue
+        # Check if rate-limited account has recovered
+        if state.status == AccountStatus.RATE_LIMITED:
+            if state.reset_at and current >= state.reset_at:
+                state.status = AccountStatus.ACTIVE
+                state.error_count = 0
+                state.reset_at = None
+            else:
+                continue
+        # Check if quota-exceeded account has recovered
+        if state.status == AccountStatus.QUOTA_EXCEEDED:
+            if state.reset_at and current >= state.reset_at:
+                state.status = AccountStatus.ACTIVE
+                state.used_percent = 0.0
+                state.reset_at = None
+            else:
+                continue
+        # Apply cooldown logic
+        if state.cooldown_until and current >= state.cooldown_until:
+            state.cooldown_until = None
+            state.last_error_at = None
+            state.error_count = 0
+        if state.cooldown_until and current < state.cooldown_until:
+            continue
+        # Apply exponential backoff for repeated errors
+        if state.error_count >= 3:
+            backoff = min(300, 30 * (2 ** (state.error_count - 3)))
+            if state.last_error_at and current - state.last_error_at < backoff:
+                continue
+        available.append(state)
+
+    # 2. Return error if no accounts available
+    if not available:
+        return SelectionResult(None, "No available accounts")
+
+    # 3. Select based on strategy
+    if routing_strategy == "round_robin":
+        selected = min(available, key=_round_robin_sort_key)
+    else:
+        selected = min(available, key=_reset_first_sort_key if prefer_earlier_reset else _usage_sort_key)
+    
+    return SelectionResult(selected, None)
+```
+
+## Performance Considerations
+
+### Usage Refresh Overhead
+
+Usage-weighted strategy requires periodic usage data refresh:
+
+- **Refresh interval**: Configurable via `USAGE_REFRESH_INTERVAL_SECONDS` (default: 300s)
+- **API calls**: One usage API call per account per interval
+- **Database writes**: One `usage_history` row per account per interval
+
+<Tip>
+For high-request-rate deployments (>1000 req/min), consider increasing the refresh interval to reduce overhead, or use round-robin for accounts with identical quotas.
+</Tip>
+
+### Request Latency
+
+The selection algorithm runs on every request:
+
+- **Usage-weighted**: O(n log n) sorting where n = number of accounts
+- **Round-robin**: O(n log n) sorting by timestamp
+- **Typical overhead**: Less than 1ms for pools up to 100 accounts
+
+## Strategy Comparison
+
+| Feature | Usage-Weighted | Round-Robin |
+|---------|----------------|-------------|
+| **Fairness** | High - distributes evenly by quota | Medium - rotates evenly by request count |
+| **Quota awareness** | Yes - prioritizes low-usage accounts | No - ignores current usage |
+| **Simplicity** | Medium - requires usage tracking | High - only tracks selection time |
+| **Overhead** | Low - cached usage data | Minimal - timestamp only |
+| **Best for** | Production workloads with mixed accounts | Testing or homogeneous pools |
+| **Quota exhaustion risk** | Low - balances consumption | High - can exhaust accounts unevenly |
+
+## Troubleshooting
+
+### Uneven Distribution
+
+**Symptom**: Some accounts heavily used, others idle
+
+**Causes**:
+- Round-robin with heterogeneous account types
+- Sticky sessions concentrating traffic
+- Some accounts frequently rate-limited (check error logs)
+
+**Solution**: Switch to usage-weighted strategy
+
+### All Accounts Exhausted
+
+**Symptom**: "No available accounts" errors
+
+**Causes**:
+- Insufficient total quota for traffic volume
+- All accounts hitting rate limits or quota simultaneously
+
+**Solution**: 
+1. Add more accounts to pool
+2. Reduce traffic or implement request queuing
+3. Upgrade accounts to higher-tier plans
+
+### Selection Bias
+
+**Symptom**: One account always selected first
+
+**Causes**:
+- Account has significantly lower usage than others
+- Clock skew affecting `last_selected_at` timestamps
+
+**Solution**: Normal behavior for usage-weighted. If problematic, check usage data is refreshing correctly.
+
+## Related Features
+
+- [Account Pooling](/features/account-pooling) - Understanding account states
+- [Usage Tracking](/features/usage-tracking) - Monitor consumption patterns
+- [API Keys](/features/api-keys) - Filter accounts by model support
+
+## Technical Reference
+
+Key source files:
+
+- `app/core/balancer/logic.py:45-134` - Selection algorithm
+- `app/modules/proxy/load_balancer.py:54-138` - Load balancer integration
+- `app/db/models.py:30-36` - AccountStatus enum
+- `app/core/balancer/types.py:21` - RoutingStrategy type

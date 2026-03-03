@@ -1,0 +1,452 @@
+---
+title: Docker Deployment
+description: Deploy Codex-LB using Docker or Docker Compose with persistent data storage
+---
+
+## Quick Start
+
+The fastest way to deploy Codex-LB is using Docker with a named volume for data persistence:
+
+```bash
+# Create a named volume for data persistence
+docker volume create codex-lb-data
+
+# Run the container
+docker run -d --name codex-lb \
+  -p 2455:2455 -p 1455:1455 \
+  -v codex-lb-data:/var/lib/codex-lb \
+  ghcr.io/soju06/codex-lb:latest
+```
+
+Open [http://localhost:2455](http://localhost:2455) in your browser to access the dashboard.
+
+## Port Mapping
+
+Codex-LB requires two ports:
+
+| Port | Purpose | Description |
+|------|---------|-------------|
+| **2455** | Main API & Dashboard | Primary endpoint for API requests and web dashboard |
+| **1455** | OAuth Callback | OAuth authentication callback endpoint (required for account login) |
+
+<Warning>
+Port **1455** cannot be changed. OpenAI's OAuth flow requires this specific port for the redirect URI.
+</Warning>
+
+## Volume Mounts
+
+### Data Directory
+
+All persistent data is stored in `/var/lib/codex-lb/` inside the container:
+
+```bash
+# Using a named volume (recommended)
+-v codex-lb-data:/var/lib/codex-lb
+
+# Using a bind mount (alternative)
+-v /path/on/host:/var/lib/codex-lb
+```
+
+This directory contains:
+- **Database**: `store.db` (SQLite by default)
+- **Encryption keys**: `encryption.key`
+- **Backup files**: Automatic pre-migration backups (if enabled)
+
+### Environment Configuration
+
+You can provide environment variables using:
+
+```bash
+# Using --env-file
+docker run -d --name codex-lb \
+  --env-file .env.local \
+  -p 2455:2455 -p 1455:1455 \
+  -v codex-lb-data:/var/lib/codex-lb \
+  ghcr.io/soju06/codex-lb:latest
+
+# Using individual -e flags
+docker run -d --name codex-lb \
+  -e CODEX_LB_DATABASE_URL=postgresql+asyncpg://... \
+  -e CODEX_LB_OAUTH_REDIRECT_URI=http://localhost:1455/auth/callback \
+  -p 2455:2455 -p 1455:1455 \
+  -v codex-lb-data:/var/lib/codex-lb \
+  ghcr.io/soju06/codex-lb:latest
+```
+
+See [Configuration](/configuration/environment-variables) for all available options.
+
+## Docker Compose
+
+### Basic Setup
+
+Create a `docker-compose.yml` file:
+
+```yaml
+services:
+  codex-lb:
+    image: ghcr.io/soju06/codex-lb:latest
+    ports:
+      - "2455:2455"
+      - "1455:1455"
+    volumes:
+      - codex-lb-data:/var/lib/codex-lb
+    env_file:
+      - .env.local
+    restart: unless-stopped
+
+volumes:
+  codex-lb-data:
+    name: codex-lb-data
+```
+
+Start the service:
+
+```bash
+docker compose up -d
+```
+
+### With PostgreSQL
+
+For production deployments with higher concurrency, use PostgreSQL:
+
+```yaml
+services:
+  codex-lb:
+    image: ghcr.io/soju06/codex-lb:latest
+    ports:
+      - "2455:2455"
+      - "1455:1455"
+    volumes:
+      - codex-lb-data:/var/lib/codex-lb
+    environment:
+      CODEX_LB_DATABASE_URL: postgresql+asyncpg://codex_lb:codex_lb@postgres:5432/codex_lb
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: codex_lb
+      POSTGRES_PASSWORD: codex_lb
+      POSTGRES_DB: codex_lb
+    ports:
+      - "5432:5432"
+    volumes:
+      - codex-lb-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U codex_lb -d codex_lb"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+volumes:
+  codex-lb-data:
+    name: codex-lb-data
+  codex-lb-postgres-data:
+    name: codex-lb-postgres-data
+```
+
+<Info>
+PostgreSQL is optional. SQLite is sufficient for most deployments and provides zero-config startup.
+</Info>
+
+## Database Migrations
+
+### Automatic Migrations
+
+By default, Codex-LB runs database migrations automatically on startup:
+
+```bash
+# Enabled by default
+CODEX_LB_DATABASE_MIGRATE_ON_STARTUP=true
+```
+
+The Docker entrypoint script (`/app/scripts/docker-entrypoint.sh`) executes:
+
+```bash
+#!/bin/sh
+set -eu
+
+python -m app.db.migrate upgrade
+
+export CODEX_LB_DATABASE_MIGRATE_ON_STARTUP=false
+exec fastapi run --host 0.0.0.0 --port 2455
+```
+
+### SQLite Backup Before Migration
+
+SQLite databases are automatically backed up before migrations:
+
+```bash
+# Enabled by default
+CODEX_LB_DATABASE_SQLITE_PRE_MIGRATE_BACKUP_ENABLED=true
+CODEX_LB_DATABASE_SQLITE_PRE_MIGRATE_BACKUP_MAX_FILES=5
+```
+
+Backup files are stored in the data directory with timestamps.
+
+### Manual Migrations
+
+To run migrations manually:
+
+```bash
+# Using docker exec
+docker exec codex-lb python -m app.db.migrate upgrade
+
+# Using docker compose
+docker compose exec codex-lb python -m app.db.migrate upgrade
+```
+
+### Migration Validation
+
+Check migration status and validate schema:
+
+```bash
+# Check current revision
+docker exec codex-lb python -m app.db.migrate current
+
+# Validate migrations (checks head count, naming, drift)
+docker exec codex-lb codex-lb-db check
+```
+
+## Backup and Restore
+
+### Backing Up Data
+
+#### Using Docker Volumes
+
+```bash
+# Stop the container
+docker stop codex-lb
+
+# Create a backup tarball
+docker run --rm \
+  -v codex-lb-data:/data \
+  -v $(pwd):/backup \
+  alpine tar czf /backup/codex-lb-backup-$(date +%Y%m%d-%H%M%S).tar.gz -C /data .
+
+# Restart the container
+docker start codex-lb
+```
+
+#### Using Bind Mounts
+
+If you're using a bind mount, simply copy the directory:
+
+```bash
+cp -r /path/to/codex-lb-data /path/to/backup-$(date +%Y%m%d-%H%M%S)
+```
+
+#### PostgreSQL Backup
+
+For PostgreSQL deployments:
+
+```bash
+# Dump the database
+docker compose exec postgres pg_dump -U codex_lb codex_lb > backup-$(date +%Y%m%d-%H%M%S).sql
+
+# Or using pg_dumpall for all databases
+docker compose exec postgres pg_dumpall -U codex_lb > backup-all-$(date +%Y%m%d-%H%M%S).sql
+```
+
+### Restoring Data
+
+#### Restoring SQLite from Volume Backup
+
+```bash
+# Stop the container
+docker stop codex-lb
+
+# Restore from tarball
+docker run --rm \
+  -v codex-lb-data:/data \
+  -v $(pwd):/backup \
+  alpine sh -c "cd /data && rm -rf * && tar xzf /backup/codex-lb-backup-TIMESTAMP.tar.gz"
+
+# Restart the container
+docker start codex-lb
+```
+
+#### Restoring PostgreSQL
+
+```bash
+# Restore from SQL dump
+docker compose exec -T postgres psql -U codex_lb codex_lb < backup-TIMESTAMP.sql
+```
+
+### SQLite Recovery Tool
+
+If your SQLite database becomes corrupted:
+
+```bash
+# Attempt recovery
+docker exec codex-lb python -m app.db.recover \
+  --input /var/lib/codex-lb/store.db \
+  --output /var/lib/codex-lb/store-recovered.db
+
+# If successful, replace the original
+docker exec codex-lb sh -c \
+  "mv /var/lib/codex-lb/store.db /var/lib/codex-lb/store.db.old && \
+   mv /var/lib/codex-lb/store-recovered.db /var/lib/codex-lb/store.db"
+
+# Restart the container
+docker restart codex-lb
+```
+
+## Health Checks
+
+### Built-in Health Endpoint
+
+Codex-LB provides a health check endpoint:
+
+```bash
+curl http://localhost:2455/health
+```
+
+Response:
+```json
+{
+  "status": "ok"
+}
+```
+
+### Docker Health Check
+
+Add a health check to your `docker-compose.yml`:
+
+```yaml
+services:
+  codex-lb:
+    image: ghcr.io/soju06/codex-lb:latest
+    ports:
+      - "2455:2455"
+      - "1455:1455"
+    volumes:
+      - codex-lb-data:/var/lib/codex-lb
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:2455/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    restart: unless-stopped
+```
+
+Or with plain Docker:
+
+```bash
+docker run -d --name codex-lb \
+  -p 2455:2455 -p 1455:1455 \
+  -v codex-lb-data:/var/lib/codex-lb \
+  --health-cmd="curl -f http://localhost:2455/health || exit 1" \
+  --health-interval=30s \
+  --health-timeout=10s \
+  --health-retries=3 \
+  --health-start-period=40s \
+  ghcr.io/soju06/codex-lb:latest
+```
+
+## Container Management
+
+### Viewing Logs
+
+```bash
+# Follow logs
+docker logs -f codex-lb
+
+# Last 100 lines
+docker logs --tail 100 codex-lb
+
+# With Docker Compose
+docker compose logs -f codex-lb
+```
+
+### Restarting
+
+```bash
+# Restart the container
+docker restart codex-lb
+
+# Or with Docker Compose
+docker compose restart codex-lb
+```
+
+### Updating
+
+```bash
+# Pull the latest image
+docker pull ghcr.io/soju06/codex-lb:latest
+
+# Stop and remove the old container
+docker stop codex-lb
+docker rm codex-lb
+
+# Start with the new image
+docker run -d --name codex-lb \
+  -p 2455:2455 -p 1455:1455 \
+  -v codex-lb-data:/var/lib/codex-lb \
+  ghcr.io/soju06/codex-lb:latest
+```
+
+With Docker Compose:
+
+```bash
+docker compose pull
+docker compose up -d
+```
+
+## Troubleshooting
+
+### Container Won't Start
+
+Check logs for errors:
+
+```bash
+docker logs codex-lb
+```
+
+Common issues:
+- **Port already in use**: Another service is using port 2455 or 1455
+- **Permission denied**: Volume mount permissions issue
+- **Database migration failed**: Check migration logs
+
+### Database Issues
+
+Verify database connectivity:
+
+```bash
+# Check current database revision
+docker exec codex-lb python -m app.db.migrate current
+
+# Validate database integrity (SQLite)
+docker exec codex-lb sqlite3 /var/lib/codex-lb/store.db "PRAGMA integrity_check;"
+```
+
+### Reset Everything
+
+To start fresh:
+
+```bash
+# Stop and remove container
+docker stop codex-lb
+docker rm codex-lb
+
+# Remove the volume (WARNING: This deletes all data!)
+docker volume rm codex-lb-data
+
+# Recreate and start
+docker volume create codex-lb-data
+docker run -d --name codex-lb \
+  -p 2455:2455 -p 1455:1455 \
+  -v codex-lb-data:/var/lib/codex-lb \
+  ghcr.io/soju06/codex-lb:latest
+```
+
+## Next Steps
+
+- [Production Deployment](/deployment/production) - Set up Codex-LB for production with reverse proxy
+- [Configuration](/configuration/environment-variables) - Configure environment variables
+- [Client Setup](/guides/client-setup) - Connect your AI clients to Codex-LB

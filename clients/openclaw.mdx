@@ -1,0 +1,357 @@
+---
+title: OpenClaw Setup
+description: Configure OpenClaw agent framework to use Codex-LB
+---
+
+OpenClaw is an advanced agent framework. Configure it to use Codex-LB for account pooling and centralized usage tracking.
+
+## Endpoint
+
+```
+http://127.0.0.1:2455/v1
+```
+
+<Note>
+  OpenClaw uses the standard OpenAI-compatible `/v1` endpoint.
+</Note>
+
+## Configuration
+
+Edit your OpenClaw config file at `~/.openclaw/openclaw.json`:
+
+<Tabs>
+  <Tab title="Without API Key Auth">
+    Use this configuration when API key authentication is **disabled** (default):
+    
+    ```jsonc ~/.openclaw/openclaw.json
+    {
+      "agents": {
+        "defaults": {
+          "model": { "primary": "codex-lb/gpt-5.3-codex" }
+        }
+      },
+      "models": {
+        "mode": "merge",
+        "providers": {
+          "codex-lb": {
+            "baseUrl": "http://127.0.0.1:2455/v1",
+            "apiKey": "dummy",   // any value works when auth is disabled
+            "api": "openai-completions",
+            "models": [
+              { "id": "gpt-5.3-codex", "name": "GPT-5.3 Codex" },
+              { "id": "gpt-5.3-codex-spark", "name": "GPT-5.3 Codex Spark" }
+            ]
+          }
+        }
+      }
+    }
+    ```
+    
+    <Info>
+      When API key auth is disabled, OpenClaw still requires an `apiKey` field. Any string value works (e.g., `"dummy"`).
+    </Info>
+  </Tab>
+  
+  <Tab title="With API Key Auth">
+    Use this configuration when API key authentication is **enabled**:
+    
+    ```jsonc ~/.openclaw/openclaw.json
+    {
+      "agents": {
+        "defaults": {
+          "model": { "primary": "codex-lb/gpt-5.3-codex" }
+        }
+      },
+      "models": {
+        "mode": "merge",
+        "providers": {
+          "codex-lb": {
+            "baseUrl": "http://127.0.0.1:2455/v1",
+            "apiKey": "${CODEX_LB_API_KEY}",   // reads from env var
+            "api": "openai-completions",
+            "models": [
+              { "id": "gpt-5.3-codex", "name": "GPT-5.3 Codex" },
+              { "id": "gpt-5.3-codex-spark", "name": "GPT-5.3 Codex Spark" }
+            ]
+          }
+        }
+      }
+    }
+    ```
+    
+    Set the environment variable with your API key:
+    
+    ```bash
+    export CODEX_LB_API_KEY="sk-clb-..."   # key from dashboard
+    openclaw
+    ```
+    
+    <Tip>
+      The `${CODEX_LB_API_KEY}` syntax tells OpenClaw to read the key from an environment variable.
+    </Tip>
+  </Tab>
+</Tabs>
+
+## Configuration Fields
+
+| Field | Description | Required |
+|-------|-------------|----------|
+| `baseUrl` | Codex-LB `/v1` endpoint | Yes |
+| `apiKey` | API key or `${ENV_VAR}` or `"dummy"` | Yes |
+| `api` | Must be `"openai-completions"` | Yes |
+| `models` | Array of model configurations | Yes |
+| `mode` | `"merge"` to combine with other providers | No |
+| `primary` | Default model ID | Yes |
+
+## Model Configuration
+
+Define all models available in your Codex-LB instance:
+
+```jsonc
+"models": [
+  {
+    "id": "gpt-5.3-codex",
+    "name": "GPT-5.3 Codex"
+  },
+  {
+    "id": "gpt-5.3-codex-spark",
+    "name": "GPT-5.3 Codex Spark"
+  },
+  {
+    "id": "gpt-4o",
+    "name": "GPT-4o"
+  },
+  {
+    "id": "gpt-4o-mini",
+    "name": "GPT-4o Mini"
+  }
+]
+```
+
+You can reference these models in agent configurations:
+
+```jsonc
+"agents": {
+  "defaults": {
+    "model": {
+      "primary": "codex-lb/gpt-5.3-codex",
+      "fallback": "codex-lb/gpt-4o"
+    }
+  },
+  "researcher": {
+    "model": { "primary": "codex-lb/gpt-5.3-codex-spark" }
+  },
+  "writer": {
+    "model": { "primary": "codex-lb/gpt-4o" }
+  }
+}
+```
+
+## Provider Modes
+
+OpenClaw supports different provider modes:
+
+<Tabs>
+  <Tab title="Merge Mode (Recommended)">
+    Combines Codex-LB with other configured providers:
+    
+    ```jsonc
+    "models": {
+      "mode": "merge",
+      "providers": {
+        "codex-lb": { /* config */ },
+        "openai": { /* config */ },
+        "anthropic": { /* config */ }
+      }
+    }
+    ```
+    
+    Use `merge` to keep access to other providers while adding Codex-LB.
+  </Tab>
+  
+  <Tab title="Replace Mode">
+    Uses **only** the specified providers, ignoring defaults:
+    
+    ```jsonc
+    "models": {
+      "mode": "replace",
+      "providers": {
+        "codex-lb": { /* config */ }
+      }
+    }
+    ```
+    
+    Use `replace` to exclusively use Codex-LB and disable other providers.
+  </Tab>
+</Tabs>
+
+## Verify Configuration
+
+Test your setup:
+
+```bash
+# Start OpenClaw
+openclaw
+
+# Run a test agent task
+openclaw run --agent defaults "Write a hello world function"
+```
+
+Verify in the Codex-LB dashboard:
+1. Open [http://localhost:2455](http://localhost:2455)
+2. Check **Dashboard** for usage metrics
+3. Confirm requests are being logged under the correct API key
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Error: Connection refused">
+    Ensure Codex-LB is running:
+    
+    ```bash
+    curl http://127.0.0.1:2455/v1/models
+    ```
+    
+    If using Docker:
+    ```bash
+    docker ps | grep codex-lb
+    docker logs codex-lb
+    ```
+  </Accordion>
+  
+  <Accordion title="Error: 401 Unauthorized">
+    API key auth is enabled but your key is missing or invalid:
+    
+    1. Verify the environment variable is set:
+       ```bash
+       echo $CODEX_LB_API_KEY
+       ```
+    
+    2. Check the key is valid in the dashboard
+    3. Ensure the `apiKey` field uses `${CODEX_LB_API_KEY}` syntax
+    4. Restart OpenClaw after setting the environment variable
+  </Accordion>
+  
+  <Accordion title="Error: Invalid API key format">
+    If you see this when auth is **disabled**:
+    
+    1. Ensure `apiKey` is set to any string (e.g., `"dummy"`)
+    2. OpenClaw requires the field even when auth is disabled
+  </Accordion>
+  
+  <Accordion title="Provider doesn't appear">
+    If `codex-lb` doesn't show up:
+    
+    1. Verify JSON syntax is correct (no trailing commas)
+    2. Check OpenClaw logs for config parsing errors:
+       ```bash
+       openclaw --verbose
+       ```
+    3. Ensure `mode` is set correctly (`merge` or `replace`)
+  </Accordion>
+  
+  <Accordion title="Model not found">
+    The requested model isn't available:
+    
+    1. Check available models:
+       ```bash
+       curl http://127.0.0.1:2455/v1/models
+       ```
+    
+    2. Verify the model ID matches exactly (case-sensitive)
+    3. Ensure at least one account supports the model
+    4. Update the `models` array to include the correct ID
+  </Accordion>
+  
+  <Accordion title="Agent uses wrong provider">
+    If agents aren't using Codex-LB:
+    
+    1. Check the `primary` model is prefixed with `codex-lb/`
+    2. Verify agent-specific configs don't override with other providers
+    3. Use `openclaw config show` to debug resolved configuration
+  </Accordion>
+</AccordionGroup>
+
+## Advanced Configuration
+
+### Per-Agent Models
+
+Configure different models for different agent types:
+
+```jsonc
+"agents": {
+  "defaults": {
+    "model": { "primary": "codex-lb/gpt-4o" }
+  },
+  "coding": {
+    "model": {
+      "primary": "codex-lb/gpt-5.3-codex",
+      "fallback": "codex-lb/gpt-4o"
+    }
+  },
+  "research": {
+    "model": { "primary": "codex-lb/gpt-5.3-codex-spark" }
+  },
+  "chat": {
+    "model": { "primary": "codex-lb/gpt-4o-mini" }
+  }
+}
+```
+
+### Environment-Specific Configs
+
+Use different configs for development vs. production:
+
+```bash
+# Development (local Codex-LB)
+export CODEX_LB_BASE_URL="http://127.0.0.1:2455/v1"
+export CODEX_LB_API_KEY="sk-clb-dev-..."
+
+# Production (remote Codex-LB)
+export CODEX_LB_BASE_URL="https://codex-lb.company.com/v1"
+export CODEX_LB_API_KEY="sk-clb-prod-..."
+```
+
+Reference in config:
+```jsonc
+"baseUrl": "${CODEX_LB_BASE_URL}",
+"apiKey": "${CODEX_LB_API_KEY}"
+```
+
+### Remote Access
+
+If Codex-LB is running on a different machine:
+
+```jsonc
+"codex-lb": {
+  "baseUrl": "https://your-server.com/v1",
+  "apiKey": "${CODEX_LB_API_KEY}",
+  "api": "openai-completions",
+  "models": [ /* ... */ ]
+}
+```
+
+<Warning>
+  When exposing Codex-LB remotely:
+  - **Always** enable API key authentication
+  - Use HTTPS with a reverse proxy (nginx, Caddy)
+  - Configure firewall rules to restrict access
+  - See [Production Deployment](/deployment/production)
+</Warning>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="API Keys" icon="key" href="/guides/managing-api-keys">
+    Create and manage API keys for authentication
+  </Card>
+  <Card title="Rate Limiting" icon="gauge" href="/guides/rate-limiting">
+    Configure rate limits per key or account
+  </Card>
+  <Card title="Chat Completions API" icon="messages" href="/api/chat-completions">
+    Explore the `/v1/chat/completions` endpoint
+  </Card>
+  <Card title="Usage Tracking" icon="chart-line" href="/features/usage-tracking">
+    Monitor OpenClaw usage in the dashboard
+  </Card>
+</CardGroup>

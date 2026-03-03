@@ -1,0 +1,461 @@
+---
+title: Error Handling
+description: Error response format, status codes, and error handling in Codex-LB
+---
+
+## Error Response Format
+
+Codex-LB uses the OpenAI error envelope format for all API errors, ensuring compatibility with existing OpenAI SDK clients and tools.
+
+### Standard Error Envelope
+
+All errors are returned in this format:
+
+```json
+{
+  "error": {
+    "message": "Human-readable error description",
+    "type": "error_type",
+    "code": "error_code",
+    "param": "parameter_name"
+  }
+}
+```
+
+**Fields**:
+
+- **message** (string, required) - A human-readable description of the error
+- **type** (string, required) - The type of error (e.g., `authentication_error`, `invalid_request_error`)
+- **code** (string, required) - A machine-readable error code
+- **param** (string, optional) - The parameter that caused the error (for validation errors)
+- **plan_type** (string, optional) - Plan type information (for rate limit errors)
+- **resets_at** (number, optional) - Unix timestamp when rate limit resets
+- **resets_in_seconds** (number, optional) - Seconds until rate limit resets
+
+See `app/core/errors.py:7-14` for the complete error detail type definition.
+
+## HTTP Status Codes
+
+Codex-LB uses standard HTTP status codes to indicate the outcome of API requests:
+
+### Success Codes
+
+- **200 OK** - Request succeeded
+- **201 Created** - Resource created successfully (management API)
+
+### Client Error Codes (4xx)
+
+#### 400 Bad Request
+
+Returned when the request payload is invalid or cannot be processed.
+
+**Common causes**:
+- Invalid JSON in request body
+- Missing required parameters
+- Invalid parameter values
+- Unsupported transcription model
+
+**Error type**: `invalid_request_error`
+
+**Example** (from app/modules/proxy/api.py:118-120):
+```json
+{
+  "error": {
+    "message": "Invalid request payload",
+    "type": "invalid_request_error",
+    "code": "invalid_request_error",
+    "param": "messages"
+  }
+}
+```
+
+#### 401 Unauthorized
+
+Returned when authentication fails or credentials are missing/invalid.
+
+**Common causes**:
+- Missing Authorization header
+- Invalid API key
+- Expired API key
+- Invalid ChatGPT token (for usage endpoint)
+
+**Error type**: `authentication_error`  
+**Error code**: `invalid_api_key`
+
+**Example** (from app/core/exceptions.py:21-24):
+```json
+{
+  "error": {
+    "message": "Missing API key in Authorization header",
+    "type": "authentication_error",
+    "code": "invalid_api_key"
+  }
+}
+```
+
+#### 403 Forbidden
+
+Returned when the authenticated user/key doesn't have permission to access the requested resource.
+
+**Common causes**:
+- API key doesn't have access to the requested model
+- Insufficient permissions
+
+**Error type**: `permission_error`  
+**Error code**: `model_not_allowed`
+
+**Example** (from app/modules/proxy/api.py:562):
+```json
+{
+  "error": {
+    "message": "This API key does not have access to model 'gpt-4o'",
+    "type": "permission_error",
+    "code": "model_not_allowed"
+  }
+}
+```
+
+#### 404 Not Found
+
+Returned when the requested resource doesn't exist.
+
+**Error type**: `invalid_request_error`  
+**Error code**: `not_found`
+
+#### 422 Unprocessable Entity
+
+Returned when request validation fails (Pydantic validation errors).
+
+**Common causes**:
+- Type mismatch in request parameters
+- Value out of acceptable range
+- Enum value not recognized
+
+**Error type**: `invalid_request_error`
+
+**Example** (from app/core/handlers/exceptions.py:102-111):
+```json
+{
+  "error": {
+    "message": "Invalid request payload",
+    "type": "invalid_request_error",
+    "code": "invalid_request_error",
+    "param": "messages.0.content"
+  }
+}
+```
+
+#### 429 Too Many Requests
+
+Returned when rate limits are exceeded.
+
+**Common causes**:
+- API key request limit exceeded
+- API key token limit exceeded
+- API key cost limit exceeded
+- Upstream rate limit from OpenAI
+
+**Error type**: `rate_limit_error`  
+**Error code**: `rate_limit_exceeded`
+
+**Example** (from app/modules/proxy/api.py:540):
+```json
+{
+  "error": {
+    "message": "API key requests daily limit exceeded. Usage resets at 2026-03-04T12:00:00Z.",
+    "type": "rate_limit_error",
+    "code": "rate_limit_exceeded"
+  }
+}
+```
+
+### Server Error Codes (5xx)
+
+#### 500 Internal Server Error
+
+Returned when an unexpected error occurs on the server.
+
+**Error type**: `server_error`  
+**Error code**: `server_error` or `internal_error`
+
+**Example** (from app/core/handlers/exceptions.py:159-161):
+```json
+{
+  "error": {
+    "message": "Internal server error",
+    "type": "server_error",
+    "code": "server_error"
+  }
+}
+```
+
+#### 501 Not Implemented
+
+Returned when an endpoint or feature is not implemented.
+
+**Error type**: `server_error`  
+**Error code**: `not_implemented`
+
+**Example** (from app/modules/proxy/api.py:445-450):
+```json
+{
+  "error": {
+    "message": "responses/compact is not implemented",
+    "type": "server_error",
+    "code": "not_implemented"
+  }
+}
+```
+
+#### 502 Bad Gateway
+
+Returned when the upstream OpenAI service returns an error.
+
+**Error type**: `server_error`  
+**Error code**: `upstream_error`
+
+**Example** (from app/modules/proxy/api.py:606-613):
+```json
+{
+  "error": {
+    "message": "Upstream error",
+    "type": "server_error",
+    "code": "upstream_error"
+  }
+}
+```
+
+#### 503 Service Unavailable
+
+Returned when no accounts are available or the upstream service is unavailable.
+
+**Common causes**:
+- No ChatGPT accounts available in the pool
+- All accounts are rate limited
+- Upstream service temporarily unavailable
+
+**Error type**: `server_error`  
+**Error code**: `no_accounts` or `upstream_error`
+
+**Example** (from app/modules/proxy/api.py:294-295):
+```json
+{
+  "error": {
+    "message": "No accounts available",
+    "type": "server_error",
+    "code": "no_accounts"
+  }
+}
+```
+
+## Error Type Reference
+
+Codex-LB uses these error types, matching OpenAI's convention:
+
+### authentication_error
+
+Credentials are missing, invalid, or expired.
+
+**HTTP Status**: 401  
+**Codes**: `invalid_api_key`
+
+Defined in `app/core/exceptions.py:21-24`.
+
+### permission_error
+
+The authenticated principal lacks permission for the requested operation.
+
+**HTTP Status**: 403  
+**Codes**: `model_not_allowed`, `insufficient_permissions`
+
+Defined in `app/core/exceptions.py:27-30`.
+
+### invalid_request_error
+
+The request is malformed or contains invalid parameters.
+
+**HTTP Status**: 400, 404, 422  
+**Codes**: `invalid_request_error`, `not_found`
+
+### rate_limit_error
+
+Rate limit has been exceeded.
+
+**HTTP Status**: 429  
+**Codes**: `rate_limit_exceeded`
+
+Defined in `app/core/exceptions.py:33-36`.
+
+### server_error
+
+An unexpected server-side error occurred.
+
+**HTTP Status**: 500, 501, 502, 503  
+**Codes**: `server_error`, `internal_error`, `upstream_error`, `no_accounts`, `not_implemented`
+
+Defined in `app/core/exceptions.py:39-42`.
+
+## Error Code Reference
+
+| Code | Type | Status | Description |
+|------|------|--------|-------------|
+| `invalid_api_key` | `authentication_error` | 401 | API key is missing, invalid, or expired |
+| `model_not_allowed` | `permission_error` | 403 | API key doesn't have access to the requested model |
+| `insufficient_permissions` | `permission_error` | 403 | Insufficient permissions for the operation |
+| `rate_limit_exceeded` | `rate_limit_error` | 429 | Rate limit exceeded (includes reset time in message) |
+| `invalid_request_error` | `invalid_request_error` | 400 | Request payload is invalid |
+| `not_found` | `invalid_request_error` | 404 | Requested resource not found |
+| `validation_error` | `invalid_request_error` | 422 | Request validation failed |
+| `server_error` | `server_error` | 500 | Unexpected internal server error |
+| `internal_error` | `server_error` | 500 | Unexpected internal error |
+| `not_implemented` | `server_error` | 501 | Feature not implemented |
+| `upstream_error` | `server_error` | 502/503 | Error from upstream OpenAI service |
+| `no_accounts` | `server_error` | 503 | No ChatGPT accounts available |
+
+## Streaming Error Format
+
+When using Server-Sent Events (SSE) streaming, errors are sent as SSE events:
+
+### Error Event
+
+```
+event: error
+data: {"type":"error","error":{"message":"Error description","type":"server_error","code":"upstream_error"}}
+```
+
+### Response Failed Event
+
+For streaming responses, failures are indicated with a `response.failed` event:
+
+```
+event: response.failed
+data: {"type":"response.failed","response":{"id":"resp_abc123","object":"response","status":"failed","error":{"message":"Error description","type":"server_error","code":"upstream_error"},"created_at":1709596800}}
+```
+
+Defined in `app/core/errors.py:52-76`.
+
+## Payload Validation Errors
+
+When request payload validation fails, the error includes the `param` field indicating which parameter is invalid:
+
+### Invalid Parameter Example
+
+```json
+{
+  "error": {
+    "message": "Invalid request payload",
+    "type": "invalid_request_error",
+    "code": "invalid_request_error",
+    "param": "model"
+  }
+}
+```
+
+The `param` field uses dot notation for nested fields (e.g., `messages.0.content`).
+
+Validation error handling is in `app/modules/proxy/api.py:625-634`.
+
+## Upstream Error Handling
+
+When the upstream OpenAI service returns an error, Codex-LB:
+
+1. **Parses the error envelope** from the upstream response
+2. **Forwards the status code** (or maps to 502/503)
+3. **Preserves error details** (message, type, code)
+4. **Adds rate limit headers** to the response
+
+### Status Code Mapping
+
+Special upstream error codes are mapped:
+
+- `no_accounts` → **503 Service Unavailable** (app/modules/proxy/api.py:294-295)
+- Other errors → **502 Bad Gateway** (app/modules/proxy/api.py:660-663)
+
+### Default Error Envelope
+
+If the upstream error cannot be parsed, a default error is returned:
+
+```json
+{
+  "error": {
+    "message": "Upstream error",
+    "type": "server_error",
+    "code": "upstream_error"
+  }
+}
+```
+
+Defined in `app/modules/proxy/api.py:606-613`.
+
+## Error Handling Best Practices
+
+### Check Status Codes First
+
+Always check the HTTP status code before parsing the response body:
+
+```python
+if response.status_code != 200:
+    error_data = response.json()
+    error = error_data.get("error", {})
+    print(f"Error: {error.get('message')}")
+```
+
+### Handle Rate Limits Gracefully
+
+For 429 errors, extract the reset time from the error message and implement exponential backoff:
+
+```python
+if response.status_code == 429:
+    error = response.json()["error"]
+    # Extract reset time from message
+    # "Usage resets at 2026-03-04T12:00:00Z."
+    import re
+    match = re.search(r'resets at (\S+)', error['message'])
+    if match:
+        reset_time = match.group(1)
+        # Wait until reset_time before retrying
+```
+
+### Retry on Server Errors
+
+Implement retry logic for 5xx errors with exponential backoff:
+
+- **502 Bad Gateway** - Retry after a short delay
+- **503 Service Unavailable** - Wait longer, as accounts may be temporarily unavailable
+- **500 Internal Server Error** - Retry, but consider it may be a persistent issue
+
+### Parse Validation Errors
+
+For 422 errors, use the `param` field to identify which field failed validation:
+
+```python
+if response.status_code == 422:
+    error = response.json()["error"]
+    param = error.get("param")
+    print(f"Validation error in field: {param}")
+```
+
+### Handle Streaming Errors
+
+When using SSE streaming, watch for error events:
+
+```python
+for line in stream:
+    if line.startswith("data: "):
+        data = json.loads(line[6:])
+        if data.get("type") == "error":
+            error = data.get("error", {})
+            print(f"Stream error: {error.get('message')}")
+            break
+        elif data.get("type") == "response.failed":
+            response = data.get("response", {})
+            error = response.get("error", {})
+            print(f"Response failed: {error.get('message')}")
+            break
+```
+
+## Next Steps
+
+- [Authentication](/api/authentication) - Resolve authentication errors
+- [Rate Limiting](/guides/rate-limiting) - Configure rate limits to avoid 429 errors
+- [Troubleshooting](/guides/troubleshooting) - Debug common issues

@@ -1,0 +1,308 @@
+---
+title: OpenCode Setup
+description: Configure OpenCode AI coding assistant to use Codex-LB
+---
+
+OpenCode is an advanced AI coding assistant. Configure it to use Codex-LB for account pooling and centralized usage tracking.
+
+## Endpoint
+
+```
+http://127.0.0.1:2455/v1
+```
+
+<Note>
+  OpenCode uses the standard OpenAI-compatible `/v1` endpoint.
+</Note>
+
+## Configuration
+
+Edit your OpenCode config file at `~/.config/opencode/opencode.json`:
+
+<Tabs>
+  <Tab title="Without API Key Auth">
+    Use this configuration when API key authentication is **disabled** (default):
+    
+    ```jsonc ~/.config/opencode/opencode.json
+    {
+      "$schema": "https://opencode.ai/config.json",
+      "provider": {
+        "codex-lb": {
+          "npm": "@ai-sdk/openai-compatible",
+          "name": "codex-lb",
+          "options": {
+            "baseURL": "http://127.0.0.1:2455/v1"
+          },
+          "models": {
+            "gpt-5.3-codex": {
+              "name": "GPT-5.3 Codex",
+              "reasoning": true,
+              "interleaved": { "field": "reasoning_details" },
+              "options": { "reasoningEffort": "medium" }
+            }
+          }
+        }
+      },
+      "model": "codex-lb/gpt-5.3-codex"
+    }
+    ```
+  </Tab>
+  
+  <Tab title="With API Key Auth">
+    Use this configuration when API key authentication is **enabled**:
+    
+    ```jsonc ~/.config/opencode/opencode.json
+    {
+      "$schema": "https://opencode.ai/config.json",
+      "provider": {
+        "codex-lb": {
+          "npm": "@ai-sdk/openai-compatible",
+          "name": "codex-lb",
+          "options": {
+            "baseURL": "http://127.0.0.1:2455/v1",
+            "apiKey": "{env:CODEX_LB_API_KEY}"   // reads from env var
+          },
+          "models": {
+            "gpt-5.3-codex": {
+              "name": "GPT-5.3 Codex",
+              "reasoning": true,
+              "interleaved": { "field": "reasoning_details" },
+              "options": { "reasoningEffort": "medium" }
+            }
+          }
+        }
+      },
+      "model": "codex-lb/gpt-5.3-codex"
+    }
+    ```
+    
+    Set the environment variable with your API key:
+    
+    ```bash
+    export CODEX_LB_API_KEY="sk-clb-..."   # key from dashboard
+    opencode
+    ```
+    
+    <Tip>
+      The `{env:CODEX_LB_API_KEY}` syntax tells OpenCode to read the key from an environment variable.
+    </Tip>
+  </Tab>
+</Tabs>
+
+## Configuration Fields
+
+| Field | Description | Required |
+|-------|-------------|----------|
+| `npm` | NPM package for provider adapter | Yes |
+| `name` | Provider display name | Yes |
+| `baseURL` | Codex-LB `/v1` endpoint | Yes |
+| `apiKey` | API key or `{env:VAR_NAME}` | Only if auth enabled |
+| `models` | Model configurations | Yes |
+| `reasoning` | Enable reasoning mode | For reasoning models |
+| `interleaved` | Reasoning output field | For reasoning models |
+| `reasoningEffort` | Effort level: `low`, `medium`, `high` | For reasoning models |
+
+## Multiple Models
+
+You can configure multiple models from your Codex-LB instance:
+
+```jsonc
+"models": {
+  "gpt-5.3-codex": {
+    "name": "GPT-5.3 Codex",
+    "reasoning": true,
+    "interleaved": { "field": "reasoning_details" },
+    "options": { "reasoningEffort": "medium" }
+  },
+  "gpt-5.3-codex-spark": {
+    "name": "GPT-5.3 Codex Spark",
+    "reasoning": true,
+    "interleaved": { "field": "reasoning_details" },
+    "options": { "reasoningEffort": "high" }
+  },
+  "gpt-4o": {
+    "name": "GPT-4o"
+  }
+}
+```
+
+Switch models in OpenCode using the model selector.
+
+## Preserving Default Providers
+
+The configuration above **adds** `codex-lb` alongside OpenCode's default providers (OpenAI, Anthropic, etc.).
+
+<Info>
+  If you use `enabled_providers`, you must explicitly list every provider you want to keep:
+  
+  ```jsonc
+  "enabled_providers": ["codex-lb", "openai", "anthropic"]
+  ```
+  
+  Providers not listed will be hidden.
+</Info>
+
+To **only** use Codex-LB and disable other providers:
+
+```jsonc
+{
+  "enabled_providers": ["codex-lb"],
+  "provider": { /* codex-lb config */ },
+  "model": "codex-lb/gpt-5.3-codex"
+}
+```
+
+## Verify Configuration
+
+Test your setup:
+
+```bash
+# Start OpenCode
+opencode
+
+# Check that codex-lb appears in the provider list
+# Try a simple query
+```
+
+Verify in the Codex-LB dashboard:
+1. Open [http://localhost:2455](http://localhost:2455)
+2. Check **Dashboard** for usage metrics
+3. Confirm requests are being logged
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Error: Failed to load provider">
+    The `@ai-sdk/openai-compatible` package may be missing:
+    
+    ```bash
+    # Install the OpenAI-compatible adapter
+    npm install -g @ai-sdk/openai-compatible
+    ```
+    
+    Or if using OpenCode's built-in package manager:
+    ```bash
+    opencode install @ai-sdk/openai-compatible
+    ```
+  </Accordion>
+  
+  <Accordion title="Error: Connection refused">
+    Ensure Codex-LB is running:
+    
+    ```bash
+    curl http://127.0.0.1:2455/v1/models
+    ```
+    
+    If using Docker:
+    ```bash
+    docker ps | grep codex-lb
+    docker logs codex-lb
+    ```
+  </Accordion>
+  
+  <Accordion title="Error: 401 Unauthorized">
+    API key auth is enabled but your key is missing or invalid:
+    
+    1. Verify the environment variable is set:
+       ```bash
+       echo $CODEX_LB_API_KEY
+       ```
+    
+    2. Check the key is valid in the dashboard
+    3. Ensure the `apiKey` field uses `{env:CODEX_LB_API_KEY}` syntax
+    4. Restart OpenCode after setting the environment variable
+  </Accordion>
+  
+  <Accordion title="Provider doesn't appear in selector">
+    If `codex-lb` doesn't show up:
+    
+    1. Verify JSON syntax is correct (no trailing commas)
+    2. Check OpenCode logs for config parsing errors
+    3. If using `enabled_providers`, ensure `codex-lb` is listed
+    4. Restart OpenCode
+  </Accordion>
+  
+  <Accordion title="Model not found">
+    The requested model isn't available:
+    
+    1. Check available models:
+       ```bash
+       curl http://127.0.0.1:2455/v1/models
+       ```
+    
+    2. Verify at least one account supports the model
+    3. Update the `models` config to match available models
+  </Accordion>
+</AccordionGroup>
+
+## Advanced Configuration
+
+### Reasoning Effort Levels
+
+For models with reasoning capabilities, configure the effort level:
+
+```jsonc
+"options": {
+  "reasoningEffort": "low"     // fastest, least thorough
+  "reasoningEffort": "medium"  // balanced (default)
+  "reasoningEffort": "high"    // slower, more thorough
+}
+```
+
+### Remote Access
+
+If Codex-LB is running on a different machine:
+
+```jsonc
+"options": {
+  "baseURL": "https://your-server.com/v1",
+  "apiKey": "{env:CODEX_LB_API_KEY}"
+}
+```
+
+<Warning>
+  When exposing Codex-LB remotely:
+  - **Always** enable API key authentication
+  - Use HTTPS with a reverse proxy
+  - Configure firewall rules
+  - See [Production Deployment](/deployment/production)
+</Warning>
+
+### Custom Headers
+
+Add custom headers for advanced use cases:
+
+```jsonc
+"options": {
+  "baseURL": "http://127.0.0.1:2455/v1",
+  "headers": {
+    "X-Custom-Header": "value"
+  }
+}
+```
+
+## VS Code Extension
+
+If using OpenCode's VS Code extension, it reads from the same `~/.config/opencode/opencode.json` file. The configuration above should work for both CLI and VS Code usage.
+
+After updating the config:
+1. Reload VS Code window (`Cmd/Ctrl + Shift + P` → "Reload Window")
+2. Check the OpenCode output panel for any errors
+3. Verify `codex-lb` appears in the model selector
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="API Keys" icon="key" href="/guides/managing-api-keys">
+    Create and manage API keys for authentication
+  </Card>
+  <Card title="Model Routing" icon="route" href="/guides/model-routing">
+    Configure intelligent model routing
+  </Card>
+  <Card title="Chat Completions API" icon="messages" href="/api/chat-completions">
+    Explore the `/v1/chat/completions` endpoint
+  </Card>
+  <Card title="Usage Tracking" icon="chart-line" href="/features/usage-tracking">
+    Monitor OpenCode usage in the dashboard
+  </Card>
+</CardGroup>

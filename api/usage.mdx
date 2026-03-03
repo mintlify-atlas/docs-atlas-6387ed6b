@@ -1,0 +1,327 @@
+---
+title: 'Usage Tracking'
+description: 'Monitor token usage and costs across accounts'
+---
+
+## Overview
+
+The Usage Tracking API provides visibility into token consumption, costs, and usage patterns across all Claude accounts. You can retrieve summary statistics, historical usage data, and per-window breakdowns.
+
+<Note>
+  All Usage endpoints require dashboard authentication via session cookie.
+</Note>
+
+## Get Usage Summary
+
+<ParamField path="GET /api/usage/summary" type="endpoint">
+  Retrieve aggregated usage statistics including current window state, costs, and key metrics.
+</ParamField>
+
+### Response
+
+<ResponseField name="primary_window" type="object" required>
+  Primary (daily) usage window aggregate
+  
+  <Expandable title="UsageWindow">
+    <ResponseField name="remaining_percent" type="number">Average remaining capacity across accounts (0-100)</ResponseField>
+    <ResponseField name="capacity_credits" type="number">Total capacity in credits</ResponseField>
+    <ResponseField name="remaining_credits" type="number">Total remaining credits</ResponseField>
+    <ResponseField name="reset_at" type="string">Next reset timestamp</ResponseField>
+    <ResponseField name="window_minutes" type="integer">Window duration in minutes</ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="secondary_window" type="object">
+  Secondary (weekly) usage window aggregate (if applicable)
+</ResponseField>
+
+<ResponseField name="cost" type="object" required>
+  Cost metrics
+  
+  <Expandable title="properties">
+    <ResponseField name="currency" type="string">Currency code (e.g., "USD")</ResponseField>
+    <ResponseField name="totalUsd7d" type="number">Total cost in USD over last 7 days</ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="metrics" type="object">
+  Usage metrics
+  
+  <Expandable title="properties">
+    <ResponseField name="requests7d" type="integer">Total requests in last 7 days</ResponseField>
+    <ResponseField name="tokens_secondary_window" type="integer">Total tokens used in secondary window</ResponseField>
+    <ResponseField name="cached_tokens_secondary_window" type="integer">Cached tokens in secondary window</ResponseField>
+    <ResponseField name="errorRate7d" type="number">Error rate percentage over 7 days</ResponseField>
+    <ResponseField name="top_error" type="string">Most common error message</ResponseField>
+  </Expandable>
+</ResponseField>
+
+### Example Request
+
+```bash
+curl -X GET "https://your-instance.com/api/usage/summary" \
+  -H "Cookie: dashboard_session=your-session-token"
+```
+
+### Example Response
+
+```json
+{
+  "primary_window": {
+    "remaining_percent": 68.5,
+    "capacity_credits": 5000.0,
+    "remaining_credits": 3425.0,
+    "reset_at": "2026-03-04T00:00:00Z",
+    "window_minutes": 1440
+  },
+  "secondary_window": {
+    "remaining_percent": 82.3,
+    "capacity_credits": 25000.0,
+    "remaining_credits": 20575.0,
+    "reset_at": "2026-03-10T00:00:00Z",
+    "window_minutes": 10080
+  },
+  "cost": {
+    "currency": "USD",
+    "totalUsd7d": 125.48
+  },
+  "metrics": {
+    "requests7d": 15420,
+    "tokens_secondary_window": 2845000,
+    "cached_tokens_secondary_window": 892000,
+    "errorRate7d": 2.3,
+    "top_error": "overloaded_error"
+  }
+}
+```
+
+## Get Usage History
+
+<ParamField path="GET /api/usage/history" type="endpoint">
+  Retrieve historical usage data per account over a specified time window.
+</ParamField>
+
+### Query Parameters
+
+<ParamField query="hours" type="integer" default="24">
+  Number of hours to look back (1-168). Default is 24 hours.
+</ParamField>
+
+### Response
+
+<ResponseField name="window_hours" type="integer" required>
+  The number of hours covered by this response
+</ResponseField>
+
+<ResponseField name="accounts" type="array" required>
+  Array of per-account usage history
+  
+  <Expandable title="UsageHistoryItem">
+    <ResponseField name="account_id" type="string">Account identifier</ResponseField>
+    <ResponseField name="remaining_percent_avg" type="number">Average remaining capacity over the window</ResponseField>
+    <ResponseField name="capacity_credits" type="number">Account capacity</ResponseField>
+    <ResponseField name="remaining_credits" type="number">Current remaining credits</ResponseField>
+  </Expandable>
+</ResponseField>
+
+### Example Request
+
+```bash
+curl -X GET "https://your-instance.com/api/usage/history?hours=48" \
+  -H "Cookie: dashboard_session=your-session-token"
+```
+
+### Example Response
+
+```json
+{
+  "window_hours": 48,
+  "accounts": [
+    {
+      "account_id": "acc_123abc",
+      "remaining_percent_avg": 72.5,
+      "capacity_credits": 1000.0,
+      "remaining_credits": 680.0
+    },
+    {
+      "account_id": "acc_456def",
+      "remaining_percent_avg": 85.2,
+      "capacity_credits": 1500.0,
+      "remaining_credits": 1320.0
+    }
+  ]
+}
+```
+
+## Get Usage Window
+
+<ParamField path="GET /api/usage/window" type="endpoint">
+  Retrieve current usage breakdown by window (primary or secondary) for all accounts.
+</ParamField>
+
+### Query Parameters
+
+<ParamField query="window" type="string" default="primary">
+  Which window to query: `primary` (daily) or `secondary` (weekly)
+</ParamField>
+
+### Response
+
+<ResponseField name="window_key" type="string" required>
+  The window type queried (`primary` or `secondary`)
+</ResponseField>
+
+<ResponseField name="window_minutes" type="integer">
+  Window duration in minutes
+</ResponseField>
+
+<ResponseField name="accounts" type="array" required>
+  Array of per-account usage in this window (same structure as history endpoint)
+</ResponseField>
+
+### Example Request
+
+```bash
+curl -X GET "https://your-instance.com/api/usage/window?window=secondary" \
+  -H "Cookie: dashboard_session=your-session-token"
+```
+
+### Example Response
+
+```json
+{
+  "window_key": "secondary",
+  "window_minutes": 10080,
+  "accounts": [
+    {
+      "account_id": "acc_123abc",
+      "remaining_percent_avg": 78.0,
+      "capacity_credits": 5000.0,
+      "remaining_credits": 3900.0
+    },
+    {
+      "account_id": "acc_456def",
+      "remaining_percent_avg": 88.5,
+      "capacity_credits": 7500.0,
+      "remaining_credits": 6637.5
+    }
+  ]
+}
+```
+
+## Usage Windows
+
+Claude accounts have two usage windows:
+
+### Primary Window (Daily)
+- Resets every 24 hours
+- Typically more restrictive quota
+- Used for short-term rate limiting
+- `window_minutes`: 1440
+
+### Secondary Window (Weekly)
+- Resets every 7 days
+- Larger quota for sustained usage
+- Used for longer-term capacity planning
+- `window_minutes`: 10080
+
+Both windows are tracked independently. Codex-LB considers both when routing requests using the `usage_weighted` strategy.
+
+## Usage Metrics Explained
+
+### Credits vs Tokens
+
+- **Credits**: Abstract capacity units used by Claude. Not directly equivalent to tokens.
+- **Tokens**: Actual text units processed (input + output)
+- **Cached Tokens**: Input tokens served from prompt cache
+
+### Cost Tracking
+
+Costs are calculated based on:
+- Model pricing (varies by model)
+- Token counts (input, output, cached)
+- Any reasoning effort multipliers
+
+The `totalUsd7d` field aggregates costs across all accounts for the past 7 days.
+
+### Error Rate
+
+The `errorRate7d` metric shows the percentage of requests that resulted in errors over the past week. Common error types:
+
+- `overloaded_error`: Claude API is overloaded
+- `rate_limit_error`: Account quota exceeded
+- `invalid_request_error`: Malformed request
+
+The `top_error` field shows the most frequent error message, helping identify systemic issues.
+
+## Aggregation Logic
+
+### Summary Endpoint
+
+The summary endpoint aggregates across all active accounts:
+
+- **remaining_percent**: Weighted average based on capacity
+- **capacity_credits**: Sum of all account capacities
+- **remaining_credits**: Sum of remaining credits across accounts
+- **reset_at**: Earliest reset time across accounts (primary window)
+
+### History Endpoint
+
+Historical data is sampled at regular intervals. The `remaining_percent_avg` represents the average remaining capacity over the requested time window.
+
+## Use Cases
+
+<CardGroup cols={2}>
+  <Card title="Capacity Planning" icon="chart-line">
+    Monitor primary and secondary window usage to predict when you'll need additional accounts.
+  </Card>
+  
+  <Card title="Cost Management" icon="dollar-sign">
+    Track 7-day costs to stay within budget and identify expensive models or usage patterns.
+  </Card>
+  
+  <Card title="Health Monitoring" icon="heartbeat">
+    Watch error rates and top errors to detect API issues or configuration problems.
+  </Card>
+  
+  <Card title="Load Distribution" icon="balance-scale">
+    Use per-account history to verify load balancing is working as expected.
+  </Card>
+</CardGroup>
+
+## Authentication
+
+All usage endpoints require dashboard authentication via session cookie.
+
+## Common Patterns
+
+### Dashboard Widget
+
+Poll the summary endpoint every 30-60 seconds to power a real-time dashboard:
+
+```javascript
+setInterval(async () => {
+  const response = await fetch('/api/usage/summary', {
+    credentials: 'include'
+  });
+  const data = await response.json();
+  updateDashboard(data);
+}, 30000);
+```
+
+### Historical Analysis
+
+Retrieve a week's worth of history for trend analysis:
+
+```bash
+curl "https://your-instance.com/api/usage/history?hours=168"
+```
+
+### Window Comparison
+
+Compare primary and secondary window usage:
+
+```bash
+curl "https://your-instance.com/api/usage/window?window=primary"
+curl "https://your-instance.com/api/usage/window?window=secondary"
+```

@@ -1,0 +1,213 @@
+---
+title: 'Adding ChatGPT Accounts'
+description: 'Learn how to add ChatGPT accounts to Codex-LB via OAuth'
+icon: 'user-plus'
+---
+
+Codex-LB supports adding ChatGPT accounts via OAuth 2.0 authentication. This allows you to securely connect your ChatGPT accounts without exposing credentials.
+
+## Authentication Methods
+
+Codex-LB supports two OAuth 2.0 flows:
+
+### Browser Flow (PKCE)
+
+The browser flow uses OAuth 2.0 with PKCE (Proof Key for Code Exchange) and is recommended for most users. This method opens a browser window where you complete the sign-in process.
+
+**Best for:**
+- Desktop environments
+- Interactive setups
+- Users with browser access
+
+### Device Code Flow
+
+The device code flow is designed for headless or remote environments where opening a browser isn't feasible. You'll receive a code to enter on another device.
+
+**Best for:**
+- Headless servers
+- SSH sessions
+- Containerized deployments
+- Remote access scenarios
+
+## Adding an Account via OAuth
+
+<Steps>
+  <Step title="Open the OAuth Dialog">
+    In the Codex-LB dashboard, navigate to the Accounts section and click "Add Account" to open the OAuth dialog.
+    
+  </Step>
+
+  <Step title="Select Authentication Method">
+    Choose your preferred authentication method:
+    
+    - **Browser (PKCE)**: Opens a browser window for sign-in. Recommended for most users.
+    - **Device code**: Use a code on another device. Useful for headless environments.
+  </Step>
+
+  <Step title="Complete Authorization">
+    ### Browser Flow
+    
+    1. Click "Start sign-in" to initiate the OAuth flow
+    2. A browser window will open with the authorization URL
+    3. Sign in with your ChatGPT credentials
+    4. Grant the requested permissions
+    5. You'll be redirected to the callback URL
+    6. The dashboard will automatically detect the successful authorization
+    
+    **Note**: The callback server runs on `http://127.0.0.1:1455/auth/callback` by default. Ensure this port is available.
+    
+    ### Device Code Flow
+    
+    1. Click "Start sign-in" to initiate the device flow
+    2. Copy the user code displayed in the dialog (e.g., `ABCD-EFGH`)
+    3. Open the verification URL on any device with a browser
+    4. Enter the user code when prompted
+    5. Complete sign-in with your ChatGPT credentials
+    6. The dashboard will automatically poll for completion
+    
+    
+    **Expiration**: Device codes expire after the time shown in the dialog. You'll need to restart the flow if the code expires.
+  </Step>
+
+  <Step title="Verify Account Status">
+    Once authorization is complete, the account will appear in your accounts list with status `active`. You can verify:
+    
+    - Account email
+    - Plan type (free, plus, team, enterprise)
+    - Last refresh timestamp
+    - Current usage statistics
+  </Step>
+</Steps>
+
+## Account Information
+
+When you add an account via OAuth, Codex-LB stores:
+
+- **Account ID**: A unique identifier generated from your ChatGPT account ID and email
+- **Email**: Your ChatGPT account email
+- **Plan Type**: Your subscription tier (free, plus, team, enterprise)
+- **Tokens**: Encrypted access, refresh, and ID tokens
+- **Status**: Account status (active, rate_limited, quota_exceeded, paused, deactivated)
+
+## Importing via auth.json
+
+Alternatively, you can import accounts using an `auth.json` file:
+
+<Steps>
+  <Step title="Obtain auth.json">
+    Export your ChatGPT authentication tokens to an `auth.json` file. This file should contain:
+    
+    ```json
+    {
+      "tokens": {
+        "access_token": "...",
+        "refresh_token": "...",
+        "id_token": "..."
+      },
+      "last_refresh_at": "2026-03-03T12:00:00Z"
+    }
+    ```
+  </Step>
+
+  <Step title="Upload to Dashboard">
+    1. Navigate to the Accounts section
+    2. Click "Import Account"
+    3. Select your `auth.json` file
+    4. Click "Upload"
+  </Step>
+
+  <Step title="Verify Import">
+    The account will be added with status `active` if the import succeeds. Check for any error messages if the import fails.
+  </Step>
+</Steps>
+
+## Account Status Transitions
+
+After adding an account, it can transition between different states:
+
+| Status | Description |
+|--------|-------------|
+| `active` | Account is operational and available for requests |
+| `rate_limited` | Account has hit rate limits and is temporarily unavailable |
+| `quota_exceeded` | Account has exceeded usage quota |
+| `paused` | Account manually paused by administrator |
+| `deactivated` | Account permanently disabled due to auth failure or other issues |
+
+See [Troubleshooting](/guides/troubleshooting) for handling status issues.
+
+## Automatic Token Refresh
+
+Codex-LB automatically refreshes access tokens when they expire. The refresh process:
+
+1. Detects expired or near-expired access tokens
+2. Uses the refresh token to obtain new credentials
+3. Updates stored tokens with encryption
+4. Continues serving requests without interruption
+
+**Refresh failures** may occur if:
+- The refresh token has expired
+- Account credentials have been revoked
+- Network connectivity issues
+
+In case of permanent refresh failures, the account status will change to `deactivated`.
+
+## Security Considerations
+
+<Warning>
+  All tokens are encrypted at rest using AES-256 encryption. Never share your `auth.json` files or expose your encryption keys.
+</Warning>
+
+- Tokens are stored encrypted in the database
+- OAuth flows use PKCE for additional security
+- Callback URLs are validated to prevent CSRF attacks
+- Device codes expire after a short time window
+
+## Troubleshooting
+
+### OAuth flow fails with "OAuth error: access_denied"
+
+**Cause**: User denied authorization or session expired.
+
+**Solution**: Restart the OAuth flow and grant the required permissions.
+
+### Browser flow shows "Invalid OAuth callback state"
+
+**Cause**: State token mismatch, possibly due to session timeout or CSRF attack attempt.
+
+**Solution**:
+1. Close the OAuth dialog
+2. Start a new OAuth flow
+3. Complete authorization within the time window
+4. Ensure cookies are enabled
+
+### Device code expired before completion
+
+**Cause**: The device code has a limited validity period (typically 10-15 minutes).
+
+**Solution**: Start a new device code flow and complete authorization faster.
+
+### Account shows as deactivated after adding
+
+**Cause**: Token validation failed or account credentials were revoked.
+
+**Solution**:
+1. Remove the account from the dashboard
+2. Add it again via OAuth with fresh credentials
+3. Verify your ChatGPT account is in good standing
+
+### Duplicate identity conflict error
+
+**Cause**: An account with the same ChatGPT account ID and email already exists.
+
+**Solution**: The existing account will be updated with new tokens instead of creating a duplicate.
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Managing API Keys" icon="key" href="/guides/managing-api-keys">
+    Create API keys to access your load balancer
+  </Card>
+  <Card title="Rate Limiting" icon="gauge" href="/guides/rate-limiting">
+    Configure rate limits for your accounts
+  </Card>
+</CardGroup>

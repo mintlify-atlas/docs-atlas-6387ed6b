@@ -1,0 +1,462 @@
+---
+title: Usage Tracking
+description: Monitor account usage, metrics, and 28-day trends across your pool
+---
+
+## Overview
+
+Codex-LB tracks real-time usage metrics for each account in your pool, including:
+
+- **Rate limit consumption** - Percentage of 5-minute sliding window used
+- **Quota consumption** - Percentage of weekly/monthly allocation used
+- **Token counts** - Input and output tokens per request
+- **Credit balances** - Available ChatGPT credits for Plus/Pro accounts
+- **28-day trends** - Historical usage patterns for capacity planning
+
+## How Usage Tracking Works
+
+### Automatic Refresh
+
+Codex-LB automatically refreshes usage data from ChatGPT's backend API:
+
+```python
+# From app/modules/usage/updater.py:55-93
+async def refresh_accounts(
+    self,
+    accounts: list[Account],
+    latest_usage: Mapping[str, UsageHistory],
+) -> bool:
+    """Refresh usage for all accounts. Returns True if usage rows were written."""
+    settings = get_settings()
+    if not settings.usage_refresh_enabled:
+        return False
+
+    refreshed = False
+    now = utcnow()
+    interval = settings.usage_refresh_interval_seconds
+    for account in accounts:
+        if account.status == AccountStatus.DEACTIVATED:
+            continue
+        latest = latest_usage.get(account.id)
+        if latest and (now - latest.recorded_at).total_seconds() < interval:
+            continue
+        # Refresh this account's usage
+```
+
+**Default refresh interval**: 300 seconds (5 minutes)
+
+<Note>
+Usage refresh happens automatically during account selection. No separate background job is required.
+</Note>
+
+### Usage Windows
+
+ChatGPT enforces two types of usage windows:
+
+**Primary Window** (Rate Limiting):
+- **Duration**: 5 minutes (sliding window)
+- **Limit**: Varies by plan (e.g., 80 requests per 5 minutes for Plus)
+- **Reset behavior**: Continuous sliding - older requests expire rolling off
+
+**Secondary Window** (Quota):
+- **Duration**: 7 days (weekly) or 30 days (monthly)
+- **Limit**: Varies by plan (e.g., 10M tokens/week for Plus)
+- **Reset behavior**: Hard reset at fixed interval
+
+```python
+# From app/modules/usage/updater.py:134-169
+if primary and primary.used_percent is not None:
+    entry = await self._usage_repo.add_entry(
+        account_id=account.id,
+        used_percent=float(primary.used_percent),
+        window="primary",
+        reset_at=_reset_at(primary.reset_at, primary.reset_after_seconds, now_epoch),
+        window_minutes=_window_minutes(primary.limit_window_seconds),
+    )
+
+if secondary and secondary.used_percent is not None:
+    entry = await self._usage_repo.add_entry(
+        account_id=account.id,
+        used_percent=float(secondary.used_percent),
+        window="secondary",
+        reset_at=_reset_at(secondary.reset_at, secondary.reset_after_seconds, now_epoch),
+        window_minutes=_window_minutes(secondary.limit_window_seconds),
+    )
+```
+
+### Data Model
+
+Usage data is stored in the `usage_history` table:
+
+```sql
+CREATE TABLE usage_history (
+    id INTEGER PRIMARY KEY,
+    account_id TEXT NOT NULL,
+    recorded_at TIMESTAMP NOT NULL,
+    window TEXT,  -- 'primary' or 'secondary'
+    used_percent REAL NOT NULL,
+    input_tokens INTEGER,
+    output_tokens INTEGER,
+    reset_at INTEGER,  -- Unix timestamp
+    window_minutes INTEGER,  -- Window duration in minutes
+    credits_has BOOLEAN,
+    credits_unlimited BOOLEAN,
+    credits_balance REAL
+);
+```
+
+Each refresh creates new rows with current snapshots. Historical data enables trend analysis.
+
+## Usage in Load Balancing
+
+The load balancer uses usage data to make routing decisions:
+
+```python
+# From app/modules/proxy/load_balancer.py:76-81
+latest_primary = await repos.usage.latest_by_account()
+updater = UsageUpdater(repos.usage, repos.accounts)
+refreshed = await updater.refresh_accounts(accounts, latest_primary)
+if refreshed:
+    latest_primary = await repos.usage.latest_by_account()
+latest_secondary = await repos.usage.latest_by_account(window="secondary")
+```
+
+**Usage-weighted routing** prioritizes accounts with lower `used_percent`:
+
+```python
+# From app/core/balancer/logic.py:110-114
+def _usage_sort_key(state: AccountState) -> tuple[float, float, float, str]:
+    primary_used = state.used_percent if state.used_percent is not None else 0.0
+    secondary_used = state.secondary_used_percent if state.secondary_used_percent is not None else primary_used
+    last_selected = state.last_selected_at or 0.0
+    return secondary_used, primary_used, last_selected, state.account_id
+```
+
+Accounts are sorted by:
+1. Secondary usage % (quota window) - lowest first
+2. Primary usage % (rate limit window) - lowest first
+3. Last selection time - oldest first
+4. Account ID - for stable ordering
+
+## Quota Application
+
+The system applies quota logic to determine account availability:
+
+```python
+# From app/core/usage/quota.py:9-57
+def apply_usage_quota(
+    *,
+    status: AccountStatus,
+    primary_used: float | None,
+    primary_reset: int | None,
+    primary_window_minutes: int | None,
+    runtime_reset: float | None,
+    secondary_used: float | None,
+    secondary_reset: int | None,
+) -> tuple[AccountStatus, float | None, float | None]:
+    # Secondary (quota) takes precedence
+    if secondary_used is not None:
+        if secondary_used >= 100.0:
+            status = AccountStatus.QUOTA_EXCEEDED
+            used_percent = 100.0
+            if secondary_reset is not None:
+                reset_at = secondary_reset
+            return status, used_percent, reset_at
+    
+    # Then primary (rate limit)
+    if primary_used is not None:
+        if primary_used >= 100.0:
+            status = AccountStatus.RATE_LIMITED
+            used_percent = 100.0
+            if primary_reset is not None:
+                reset_at = primary_reset
+            return status, used_percent, reset_at
+    
+    return status, used_percent, reset_at
+```
+
+**Precedence rules**:
+1. Monthly/weekly quota exhaustion → `QUOTA_EXCEEDED`
+2. 5-minute rate limit exhaustion → `RATE_LIMITED`
+3. Otherwise → `ACTIVE`
+
+<Warning>
+If secondary usage reaches 100%, the account is marked `QUOTA_EXCEEDED` regardless of primary window availability. This ensures monthly quota is respected.
+</Warning>
+
+## Credit Tracking
+
+For Plus and Pro accounts with credit-based billing:
+
+```python
+# From app/modules/usage/updater.py:209-216
+def _credits_snapshot(payload: UsagePayload) -> tuple[bool | None, bool | None, float | None]:
+    credits = payload.credits
+    if credits is None:
+        return None, None, None
+    credits_has = credits.has_credits
+    credits_unlimited = credits.unlimited
+    balance_value = credits.balance
+    return credits_has, credits_unlimited, _parse_credits_balance(balance_value)
+```
+
+Credit information is stored alongside usage percentages for monitoring and alerting.
+
+## Usage API
+
+### Get Current Usage
+
+```bash
+GET /api/usage
+```
+
+**Response**:
+```json
+{
+  "accounts": [
+    {
+      "account_id": "user-abc123",
+      "email": "account1@example.com",
+      "plan_type": "plus",
+      "status": "active",
+      "used_percent_avg": 45.2,
+      "reset_at": 1735689600,
+      "window_minutes": 10080,  // 7 days
+      "samples": 144,  // Data points in 28 days
+      "last_recorded_at": "2024-12-31T23:55:00Z"
+    }
+  ],
+  "since": "2024-12-04T00:00:00Z"
+}
+```
+
+### Get Usage Trends
+
+```bash
+GET /api/usage/trends?account_id=user-abc123
+```
+
+**Response**:
+```json
+{
+  "buckets": [
+    {
+      "bucket_epoch": 1735660800,  // 6-hour bucket
+      "account_id": "user-abc123",
+      "window": "primary",
+      "avg_used_percent": 32.5,
+      "samples": 72
+    },
+    {
+      "bucket_epoch": 1735682400,
+      "account_id": "user-abc123",
+      "window": "primary",
+      "avg_used_percent": 48.1,
+      "samples": 68
+    }
+  ],
+  "bucket_seconds": 21600,  // 6 hours
+  "since": "2024-12-04T00:00:00Z"
+}
+```
+
+**Trend parameters**:
+- `bucket_seconds`: Aggregation interval (default: 21600 = 6 hours)
+- `since`: Start time for historical data (default: 28 days ago)
+- `window`: Filter by "primary" or "secondary" (default: both)
+- `account_id`: Filter to specific account (default: all)
+
+### Trend Calculation
+
+From `app/modules/usage/repository.py:115-167`:
+
+```python
+async def trends_by_bucket(
+    self,
+    since: datetime,
+    bucket_seconds: int = 21600,  # 6 hours
+    window: str | None = None,
+    account_id: str | None = None,
+) -> list[UsageTrendBucket]:
+    # Floor timestamp to bucket boundary
+    if dialect == "postgresql":
+        bucket_expr = func.floor(func.extract("epoch", UsageHistory.recorded_at) / bucket_seconds) * bucket_seconds
+    else:
+        epoch_col = cast(func.strftime("%s", UsageHistory.recorded_at), Integer)
+        bucket_expr = cast(epoch_col / bucket_seconds, Integer) * bucket_seconds
+    
+    # Aggregate within buckets
+    stmt = (
+        select(
+            bucket_col,
+            UsageHistory.account_id,
+            window_expr.label("window"),
+            func.avg(UsageHistory.used_percent).label("avg_used_percent"),
+            func.count(UsageHistory.id).label("samples"),
+        )
+        .where(*conditions)
+        .group_by(bucket_col, UsageHistory.account_id, window_expr)
+        .order_by(bucket_col)
+    )
+```
+
+Each bucket contains:
+- **Average usage %** across all samples in that time window
+- **Sample count** for data quality assessment
+- **Per-account, per-window** granularity
+
+<Tip>
+Use 6-hour buckets (21600s) for 28-day overviews, or 1-hour buckets (3600s) for detailed recent analysis.
+</Tip>
+
+## Dashboard Visualization
+
+The web dashboard displays usage data in multiple views:
+
+### Overview Cards
+
+- **Active Accounts**: Count of accounts in `ACTIVE` status
+- **Average Usage**: Mean `used_percent` across all active accounts
+- **Accounts Near Limit**: Count where `used_percent > 80%`
+
+### Account Table
+
+Columns:
+- Email
+- Status (with color coding)
+- Plan Type
+- Usage % (primary window)
+- Quota % (secondary window)  
+- Reset time (relative, e.g., "in 4 hours")
+
+### Usage Trends Chart
+
+- **X-axis**: Time (6-hour buckets over 28 days)
+- **Y-axis**: Average usage percentage
+- **Lines**: One per account, colored by status
+- **Shading**: Highlighted regions where usage exceeded 80%
+
+## Configuration
+
+### Environment Variables
+
+```bash
+# Enable/disable usage refresh (default: true)
+USAGE_REFRESH_ENABLED=true
+
+# Refresh interval in seconds (default: 300)
+USAGE_REFRESH_INTERVAL_SECONDS=300
+
+# Historical retention period (default: 28 days)
+USAGE_RETENTION_DAYS=28
+```
+
+### Disabling Usage Tracking
+
+To disable usage tracking entirely:
+
+```bash
+USAGE_REFRESH_ENABLED=false
+```
+
+**Effects**:
+- Usage-weighted routing falls back to round-robin behavior
+- Dashboard shows stale usage data
+- No new `usage_history` rows created
+- Reduces API calls to ChatGPT backend
+
+<Warning>
+Disabling usage tracking disables quota-aware load balancing. Only disable if using round-robin strategy or for testing.
+</Warning>
+
+## Performance Considerations
+
+### Database Growth
+
+With default settings:
+- **Refresh interval**: 300 seconds (5 minutes)
+- **Rows per account per day**: 288 (24 hours × 12 refreshes/hour)
+- **Retention period**: 28 days
+- **Total rows for 10 accounts**: ~80,000 rows
+
+**Storage**:
+- Each row: ~200 bytes
+- 80,000 rows: ~16 MB
+
+Regular cleanup via retention policy keeps database size manageable.
+
+### API Call Overhead
+
+- **Calls per refresh**: 1 per account
+- **Calls per day**: (86400 / interval) × account_count
+- **Example (10 accounts, 5-min interval)**: 10 × 288 = 2,880 calls/day
+
+ChatGPT's usage API has generous limits and these calls do not count toward request quotas.
+
+### Query Performance
+
+Indexes optimize common queries:
+
+```sql
+CREATE INDEX idx_usage_recorded_at ON usage_history(recorded_at);
+CREATE INDEX idx_usage_account_time ON usage_history(account_id, recorded_at);
+```
+
+Typical query times:
+- Latest usage by account: Less than 10ms
+- 28-day trend aggregation: Less than 100ms
+- Full usage export: Less than 500ms
+
+## Troubleshooting
+
+### Stale Usage Data
+
+**Symptom**: Usage percentages not updating
+
+**Causes**:
+- `USAGE_REFRESH_ENABLED=false`
+- All accounts deactivated (no refresh triggers)
+- ChatGPT API returning errors (check logs)
+
+**Solution**: Check settings and logs, ensure at least one active account
+
+### Missing Usage History
+
+**Symptom**: Trends chart empty or incomplete
+
+**Causes**:
+- Recently added accounts (no historical data yet)
+- Database cleared or reset
+- Retention policy deleted old data
+
+**Solution**: Wait for refresh cycles to populate data (5 minutes per data point)
+
+### Usage Not Reflecting Reality
+
+**Symptom**: Dashboard shows low usage but requests failing
+
+**Causes**:
+- Cached data (5-minute refresh lag)
+- Primary vs secondary window confusion
+- Multiple Codex-LB instances not sharing state
+
+**Solution**: 
+1. Wait for next refresh cycle
+2. Check which window (primary/secondary) is exhausted
+3. Ensure single Codex-LB instance or shared database
+
+## Related Features
+
+- [Load Balancing](/features/load-balancing) - How usage affects routing
+- [Account Pooling](/features/account-pooling) - Account state management
+- [API Keys](/features/api-keys) - Per-key usage limits
+
+## Technical Reference
+
+Key source files:
+
+- `app/modules/usage/updater.py` - Usage refresh logic
+- `app/modules/usage/repository.py` - Usage data queries
+- `app/core/usage/quota.py` - Quota application rules
+- `app/core/usage/types.py` - Type definitions
+- `app/db/models.py:62-77` - UsageHistory model

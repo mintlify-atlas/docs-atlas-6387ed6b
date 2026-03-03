@@ -1,0 +1,475 @@
+---
+title: Local Development
+description: Set up Codex-LB for local development with hot reload
+---
+
+## Prerequisites
+
+Before starting, ensure you have:
+
+- **Python 3.13+**: Check with `python --version`
+- **uv**: Python package installer ([installation guide](https://github.com/astral-sh/uv))
+- **Bun 1.3.7+**: JavaScript runtime and package manager ([installation guide](https://bun.sh))
+- **Git**: For cloning the repository
+
+## Quick Start
+
+The simplest way to run Codex-LB locally is using `uvx`:
+
+```bash
+uvx codex-lb
+```
+
+This will:
+- Install Codex-LB in an isolated environment
+- Start the server on port 2455
+- Store data in `~/.codex-lb/`
+
+Open [http://localhost:2455](http://localhost:2455) to access the dashboard.
+
+## Development Setup
+
+For active development with hot reload:
+
+### 1. Clone the Repository
+
+```bash
+git clone https://github.com/soju06/codex-lb.git
+cd codex-lb
+```
+
+### 2. Install Dependencies
+
+```bash
+# Install Python dependencies
+uv sync
+
+# Install frontend dependencies
+cd frontend
+bun install
+cd ..
+```
+
+### 3. Configure Environment
+
+Create a `.env.local` file in the project root:
+
+```bash
+# Copy example configuration
+cp .env.example .env.local
+```
+
+Edit `.env.local` to customize settings. Key options:
+
+```bash
+# Database (SQLite by default)
+CODEX_LB_DATABASE_URL=sqlite+aiosqlite:///~/.codex-lb/store.db
+
+# Enable automatic migrations
+CODEX_LB_DATABASE_MIGRATE_ON_STARTUP=true
+
+# OAuth redirect (must be localhost:1455)
+CODEX_LB_OAUTH_REDIRECT_URI=http://localhost:1455/auth/callback
+CODEX_LB_OAUTH_CALLBACK_HOST=127.0.0.1
+CODEX_LB_OAUTH_CALLBACK_PORT=1455
+```
+
+See [Configuration](/configuration/environment-variables) for all options.
+
+### 4. Run Development Servers
+
+Open two terminal windows:
+
+**Terminal 1 - Backend (FastAPI)**:
+```bash
+uv run fastapi run app/main.py --reload
+```
+
+This starts the backend on **http://localhost:2455** with hot reload.
+
+**Terminal 2 - Frontend (Vite)**:
+```bash
+cd frontend
+bun run dev
+```
+
+This starts the frontend dev server on **http://localhost:5173** with HMR (Hot Module Replacement).
+
+<Info>
+In development mode, the frontend at `:5173` proxies API requests to the backend at `:2455`.
+</Info>
+
+### 5. Access the Dashboard
+
+Open [http://localhost:5173](http://localhost:5173) in your browser for the development build with hot reload.
+
+For production-like testing, open [http://localhost:2455](http://localhost:2455) after building the frontend.
+
+## Using Docker Compose for Development
+
+For a containerized development environment with hot reload:
+
+```bash
+docker compose watch
+```
+
+This starts both frontend and backend containers with file watching enabled:
+
+- **Backend changes** in `./app` sync to the container
+- **Frontend changes** in `./frontend` sync to the container  
+- **Dependency changes** (`pyproject.toml`, `package.json`) trigger rebuilds
+
+Access:
+- **Frontend dev server**: http://localhost:5173
+- **Backend API**: http://localhost:2455
+
+<Warning>
+Docker Compose watch requires Docker Compose v2.22+ with BuildKit enabled.
+</Warning>
+
+## Data Directory
+
+Local development stores data in:
+
+```
+~/.codex-lb/
+├── store.db              # SQLite database
+├── encryption.key        # Encryption key for sensitive data
+└── store.db.backup.*     # Automatic migration backups
+```
+
+To reset your local database:
+
+```bash
+rm -rf ~/.codex-lb
+```
+
+## Database Management
+
+### Running Migrations
+
+Manually run database migrations:
+
+```bash
+# Upgrade to latest
+uv run python -m app.db.migrate upgrade
+
+# Check current revision
+uv run python -m app.db.migrate current
+
+# View migration history
+uv run python -m app.db.migrate history
+```
+
+### Creating Migrations
+
+When you modify database models:
+
+```bash
+# Generate migration from model changes
+uv run alembic revision --autogenerate -m "description_of_changes"
+
+# Review generated migration in app/db/migrations/versions/
+# Edit if needed, then apply:
+uv run python -m app.db.migrate upgrade
+```
+
+<Info>
+Migration filenames use the format `YYYYMMDD_HHMMSS_slug.py` to reduce merge conflicts.
+</Info>
+
+### Validating Migrations
+
+Before committing migrations, validate them:
+
+```bash
+uv run codex-lb-db check
+```
+
+This checks:
+- Single migration head (no branches)
+- Correct revision naming format
+- No schema drift between models and migrations
+
+### Using PostgreSQL Locally
+
+To test with PostgreSQL:
+
+```bash
+# Start PostgreSQL container
+docker compose --profile postgres up -d postgres
+
+# Update .env.local
+CODEX_LB_DATABASE_URL=postgresql+asyncpg://codex_lb:codex_lb@127.0.0.1:5432/codex_lb
+
+# Run migrations
+uv run python -m app.db.migrate upgrade
+
+# Start the backend
+uv run fastapi run app/main.py --reload
+```
+
+## Building the Frontend
+
+To build the frontend for production:
+
+```bash
+cd frontend
+bun run build
+```
+
+The output is placed in `app/static/`, which the FastAPI backend serves at the root path.
+
+Test the production build:
+
+```bash
+uv run fastapi run app/main.py
+```
+
+Open [http://localhost:2455](http://localhost:2455) to see the production build.
+
+## Port Configuration
+
+### Backend (FastAPI)
+
+Default: **2455**
+
+Change with:
+
+```bash
+uv run fastapi run app/main.py --port 3000 --reload
+```
+
+### Frontend (Vite Dev Server)
+
+Default: **5173**
+
+Change in `frontend/vite.config.ts`:
+
+```typescript
+export default defineConfig({
+  server: {
+    port: 3001,
+    proxy: {
+      '/api': 'http://localhost:2455',
+      // ...
+    }
+  }
+})
+```
+
+### OAuth Callback
+
+Default: **1455** (cannot be changed)
+
+This port is required by OpenAI's OAuth implementation.
+
+## Testing API Endpoints
+
+### Interactive API Docs
+
+FastAPI provides interactive documentation:
+
+- **Swagger UI**: http://localhost:2455/docs
+- **ReDoc**: http://localhost:2455/redoc
+
+### Using curl
+
+```bash
+# Check health
+curl http://localhost:2455/health
+
+# List models (requires authentication)
+curl -H "Authorization: Bearer YOUR_API_KEY" \
+  http://localhost:2455/v1/models
+
+# Chat completion
+curl -X POST http://localhost:2455/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -d '{
+    "model": "gpt-5.3-codex",
+    "messages": [{"role": "user", "content": "Hello!"}]
+  }'
+```
+
+### Testing OAuth Flow
+
+1. Start the backend with OAuth settings configured
+2. Open the dashboard at http://localhost:5173
+3. Navigate to **Accounts** → **Add Account**
+4. Click **Login with OpenAI**
+5. Complete OAuth flow (redirects to port 1455)
+
+## Common Development Tasks
+
+### Adding a New Endpoint
+
+1. Create/edit a route in `app/modules/*/api.py`
+2. Define schemas in `app/modules/*/schemas.py`
+3. Implement business logic in `app/modules/*/service.py`
+4. Register the router in `app/main.py` if new
+5. Test at http://localhost:2455/docs
+
+### Modifying the Database
+
+1. Update models in `app/modules/*/models.py`
+2. Generate migration: `uv run alembic revision --autogenerate -m "description"`
+3. Review and edit migration in `app/db/migrations/versions/`
+4. Apply: `uv run python -m app.db.migrate upgrade`
+5. Validate: `uv run codex-lb-db check`
+
+### Adding Frontend Features
+
+1. Edit React components in `frontend/src/`
+2. Changes hot-reload automatically at http://localhost:5173
+3. Use Tanstack Query for API calls (see existing queries)
+4. Build for production: `cd frontend && bun run build`
+
+## Code Style and Linting
+
+### Python
+
+The project uses Ruff for linting and formatting:
+
+```bash
+# Check code style
+uv run ruff check .
+
+# Format code
+uv run ruff format .
+```
+
+### Frontend
+
+The frontend uses ESLint and Prettier:
+
+```bash
+cd frontend
+
+# Lint
+bun run lint
+
+# Format
+bun run format
+```
+
+## Debugging
+
+### Backend
+
+Add breakpoints in your IDE or use `breakpoint()` in the code:
+
+```python
+def some_function():
+    breakpoint()  # Execution will pause here
+    # ...
+```
+
+Run with:
+
+```bash
+uv run fastapi run app/main.py --reload
+```
+
+### Frontend
+
+Use browser DevTools:
+
+1. Open http://localhost:5173
+2. Press F12 to open DevTools
+3. Use Console, Network, and Sources tabs for debugging
+
+### Database Queries
+
+Enable SQL query logging in `.env.local`:
+
+```bash
+# Add to .env.local
+CODEX_LB_DATABASE_ECHO=true
+```
+
+This prints all SQL queries to the console.
+
+## Troubleshooting
+
+### Port Already in Use
+
+```
+ERROR: Address already in use
+```
+
+Find and kill the process using the port:
+
+```bash
+# Find process on port 2455
+lsof -i :2455
+
+# Kill it
+kill -9 <PID>
+```
+
+### Module Not Found
+
+```
+ModuleNotFoundError: No module named 'app'
+```
+
+Ensure dependencies are installed:
+
+```bash
+uv sync
+```
+
+### Frontend Build Fails
+
+```
+Frontend assets are missing
+```
+
+Build the frontend:
+
+```bash
+cd frontend
+bun install
+bun run build
+```
+
+### Database Locked
+
+```
+database is locked
+```
+
+SQLite is locked by another process. Ensure only one backend instance is running:
+
+```bash
+# Kill all Python processes
+pkill -f "fastapi run"
+
+# Restart
+uv run fastapi run app/main.py --reload
+```
+
+### OAuth Redirect Fails
+
+```
+OAuth callback failed
+```
+
+Verify in `.env.local`:
+
+```bash
+CODEX_LB_OAUTH_REDIRECT_URI=http://localhost:1455/auth/callback
+CODEX_LB_OAUTH_CALLBACK_HOST=127.0.0.1
+CODEX_LB_OAUTH_CALLBACK_PORT=1455
+```
+
+Ensure nothing else is using port 1455.
+
+## Next Steps
+
+- [Docker Deployment](/deployment/docker) - Package for deployment
+- [Production Deployment](/deployment/production) - Deploy to production
+- [Configuration](/configuration/environment-variables) - Explore all configuration options
+- [Contributing](/contributing) - Contribute to Codex-LB

@@ -1,0 +1,443 @@
+---
+title: Firewall & IP Access Control
+description: Configure IP-based access control for API endpoints
+---
+
+Codex-LB includes a built-in firewall system that restricts API access based on client IP addresses. When enabled, only requests from allowed IPs can access the proxy endpoints (`/v1/*` and `/backend-api/codex/*`).
+
+## How It Works
+
+The firewall operates in two modes:
+
+<CardGroup cols={2}>
+  <Card title="Allow All" icon="globe">
+    **Default mode**. No restrictions—any IP can access the API.
+    
+    Active when the firewall allowlist is empty.
+  </Card>
+  
+  <Card title="Allowlist Active" icon="shield-check">
+    **Restricted mode**. Only IPs in the allowlist can access protected endpoints.
+    
+    Activated automatically when you add at least one IP to the allowlist.
+  </Card>
+</CardGroup>
+
+### Protected Endpoints
+
+The firewall only protects API proxy endpoints:
+
+- `/v1` and `/v1/*` (OpenAI-compatible API)
+- `/backend-api/codex` and `/backend-api/codex/*` (Codex CLI API)
+
+**Unprotected endpoints** (always accessible):
+- `/api/*` (dashboard API)
+- `/auth/*` (OAuth callbacks)
+- `/` (dashboard frontend)
+
+This ensures you can always access the dashboard to manage the firewall, even if your IP is blocked.
+
+## Configuration
+
+### Environment Variables
+
+<ParamField path="CODEX_LB_FIREWALL_TRUST_PROXY_HEADERS" type="boolean" default="false">
+  Trust `X-Forwarded-For` headers for client IP detection.
+  
+  <Warning>
+  **Only enable this when Codex-LB is behind a trusted reverse proxy** (nginx, Caddy, Cloudflare, etc.).
+  
+  If enabled without a trusted proxy, clients can spoof their IP by setting the `X-Forwarded-For` header, completely bypassing the firewall.
+  </Warning>
+  
+  **When to enable:**
+  - Codex-LB is behind nginx/Caddy/HAProxy/Traefik
+  - Codex-LB is behind Cloudflare or another CDN
+  - You need to see real client IPs in logs and firewall checks
+  
+  **When to keep disabled:**
+  - Codex-LB is directly exposed to the internet
+  - You don't use a reverse proxy
+</ParamField>
+
+<ParamField path="CODEX_LB_FIREWALL_TRUSTED_PROXY_CIDRS" type="string" default="127.0.0.1/32,::1/128">
+  Comma-separated list of CIDR ranges for trusted proxy sources.
+  
+  Only requests from these IPs will have their `X-Forwarded-For` headers trusted. This prevents malicious clients from spoofing IPs.
+  
+  **Examples:**
+  
+  ```bash
+  # Default: localhost only
+  CODEX_LB_FIREWALL_TRUSTED_PROXY_CIDRS=127.0.0.1/32,::1/128
+  
+  # nginx on localhost + Docker network
+  CODEX_LB_FIREWALL_TRUSTED_PROXY_CIDRS=127.0.0.1/32,::1/128,172.18.0.0/16
+  
+  # Cloudflare + localhost
+  CODEX_LB_FIREWALL_TRUSTED_PROXY_CIDRS=127.0.0.1/32,::1/128,173.245.48.0/20,103.21.244.0/22,103.22.200.0/22,103.31.4.0/22,141.101.64.0/18,108.162.192.0/18,190.93.240.0/20,188.114.96.0/20,197.234.240.0/22,198.41.128.0/17,162.158.0.0/15,104.16.0.0/13,104.24.0.0/14,172.64.0.0/13,131.0.72.0/22
+  ```
+  
+  See [Cloudflare IP Ranges](https://www.cloudflare.com/ips/) for the full list.
+</ParamField>
+
+## Managing the Allowlist
+
+You can manage the IP allowlist through the dashboard or API.
+
+### Dashboard
+
+1. Navigate to **Settings → Firewall**
+2. View current mode and allowed IPs
+3. Add or remove IPs as needed
+
+### API
+
+<AccordionGroup>
+  <Accordion title="List Allowed IPs">
+    ```bash
+    curl http://localhost:2455/api/firewall/ips
+    ```
+    
+    Response:
+    ```json
+    {
+      "mode": "allowlist_active",
+      "entries": [
+        {
+          "ip_address": "203.0.113.42",
+          "created_at": "2026-03-03T12:00:00Z"
+        },
+        {
+          "ip_address": "198.51.100.0",
+          "created_at": "2026-03-03T13:00:00Z"
+        }
+      ]
+    }
+    ```
+  </Accordion>
+  
+  <Accordion title="Add an IP">
+    ```bash
+    curl -X POST http://localhost:2455/api/firewall/ips \
+      -H "Content-Type: application/json" \
+      -d '{"ipAddress": "203.0.113.42"}'
+    ```
+    
+    Response:
+    ```json
+    {
+      "ip_address": "203.0.113.42",
+      "created_at": "2026-03-03T12:00:00Z"
+    }
+    ```
+    
+    <Note>
+    IPs are automatically normalized. IPv6 addresses like `::ffff:127.0.0.1` are converted to `127.0.0.1`.
+    </Note>
+  </Accordion>
+  
+  <Accordion title="Remove an IP">
+    ```bash
+    curl -X DELETE http://localhost:2455/api/firewall/ips/203.0.113.42
+    ```
+    
+    Response:
+    ```json
+    {
+      "deleted": true
+    }
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## IP Detection Logic
+
+Codex-LB resolves the client IP using the following logic:
+
+### Without Proxy Headers Trust
+
+```python
+def get_client_ip(request):
+    return request.client.host  # Socket IP only
+```
+
+### With Proxy Headers Trust
+
+```python
+def get_client_ip(request):
+    socket_ip = request.client.host
+    
+    # Only trust X-Forwarded-For if socket IP is in trusted proxy list
+    if socket_ip in TRUSTED_PROXY_CIDRS:
+        xff_chain = request.headers.get("X-Forwarded-For").split(",")
+        # Walk chain backwards, stop at first untrusted proxy
+        for ip in reversed(xff_chain):
+            if ip not in TRUSTED_PROXY_CIDRS:
+                return ip
+    
+    return socket_ip
+```
+
+This prevents IP spoofing by only trusting `X-Forwarded-For` when the direct connection comes from a trusted proxy.
+
+## Deployment Examples
+
+### Direct Exposure (No Proxy)
+
+```bash
+CODEX_LB_FIREWALL_TRUST_PROXY_HEADERS=false
+```
+
+Add client IPs directly:
+
+```bash
+curl -X POST http://localhost:2455/api/firewall/ips \
+  -d '{"ipAddress": "203.0.113.42"}'
+```
+
+### Behind nginx (Local)
+
+```nginx
+# nginx.conf
+server {
+    listen 443 ssl;
+    server_name codex-lb.example.com;
+    
+    location / {
+        proxy_pass http://127.0.0.1:2455;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Real-IP $remote_addr;
+    }
+}
+```
+
+```bash
+CODEX_LB_FIREWALL_TRUST_PROXY_HEADERS=true
+CODEX_LB_FIREWALL_TRUSTED_PROXY_CIDRS=127.0.0.1/32,::1/128
+```
+
+Add real client IPs (not nginx's IP):
+
+```bash
+curl -X POST http://localhost:2455/api/firewall/ips \
+  -d '{"ipAddress": "203.0.113.42"}'
+```
+
+### Behind Cloudflare
+
+```bash
+CODEX_LB_FIREWALL_TRUST_PROXY_HEADERS=true
+CODEX_LB_FIREWALL_TRUSTED_PROXY_CIDRS=127.0.0.1/32,::1/128,173.245.48.0/20,103.21.244.0/22,103.22.200.0/22,103.31.4.0/22,141.101.64.0/18,108.162.192.0/18,190.93.240.0/20,188.114.96.0/20,197.234.240.0/22,198.41.128.0/17,162.158.0.0/15,104.16.0.0/13,104.24.0.0/14,172.64.0.0/13,131.0.72.0/22
+```
+
+Codex-LB will use the real client IP from Cloudflare's `X-Forwarded-For` header.
+
+### Docker Compose with nginx
+
+```yaml
+# docker-compose.yml
+services:
+  nginx:
+    image: nginx:alpine
+    ports:
+      - "443:443"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf
+    networks:
+      - codex-net
+
+  codex-lb:
+    image: ghcr.io/soju06/codex-lb:latest
+    environment:
+      - CODEX_LB_FIREWALL_TRUST_PROXY_HEADERS=true
+      - CODEX_LB_FIREWALL_TRUSTED_PROXY_CIDRS=172.18.0.0/16
+    networks:
+      - codex-net
+
+networks:
+  codex-net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.18.0.0/16
+```
+
+## Common Scenarios
+
+<AccordionGroup>
+  <Accordion title="Allow Only My Home IP">
+    ```bash
+    # Find your public IP
+    curl https://ifconfig.me
+    # Output: 203.0.113.42
+    
+    # Add to allowlist
+    curl -X POST http://localhost:2455/api/firewall/ips \
+      -d '{"ipAddress": "203.0.113.42"}'
+    ```
+    
+    Now only requests from `203.0.113.42` can access the API.
+  </Accordion>
+  
+  <Accordion title="Allow My Office Network">
+    ```bash
+    # Add the entire subnet
+    curl -X POST http://localhost:2455/api/firewall/ips \
+      -d '{"ipAddress": "192.168.1.1"}'
+    curl -X POST http://localhost:2455/api/firewall/ips \
+      -d '{"ipAddress": "192.168.1.2"}'
+    # ... repeat for each IP, or add a CIDR range in future versions
+    ```
+  </Accordion>
+  
+  <Accordion title="Allow Localhost Only">
+    ```bash
+    curl -X POST http://localhost:2455/api/firewall/ips \
+      -d '{"ipAddress": "127.0.0.1"}'
+    curl -X POST http://localhost:2455/api/firewall/ips \
+      -d '{"ipAddress": "::1"}'
+    ```
+    
+    This restricts API access to local processes only.
+  </Accordion>
+  
+  <Accordion title="Temporarily Disable Firewall">
+    ```bash
+    # Remove all IPs from allowlist
+    curl -X DELETE http://localhost:2455/api/firewall/ips/203.0.113.42
+    curl -X DELETE http://localhost:2455/api/firewall/ips/198.51.100.0
+    
+    # Firewall automatically switches to "allow_all" mode
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Error Messages
+
+### IP Forbidden
+
+```json
+{
+  "error": {
+    "message": "Access denied for client IP",
+    "type": "access_error",
+    "code": "ip_forbidden"
+  }
+}
+```
+
+**Cause**: Client IP is not in the allowlist.
+
+**Solution**: Add the client's IP to the allowlist or disable the firewall.
+
+### Invalid IP Address
+
+```json
+{
+  "error": "Invalid IP address"
+}
+```
+
+**Cause**: The provided IP address is not valid.
+
+**Solution**: Verify the IP format (IPv4: `203.0.113.42`, IPv6: `2001:db8::1`).
+
+### IP Already Exists
+
+```json
+{
+  "error": "IP address already exists"
+}
+```
+
+**Cause**: The IP is already in the allowlist.
+
+**Solution**: No action needed. The IP is already allowed.
+
+## Security Best Practices
+
+<CardGroup cols={2}>
+  <Card title="Use with API Keys" icon="key">
+    Combine firewall with API key authentication for defense in depth.
+  </Card>
+  
+  <Card title="Limit Trusted Proxies" icon="filter">
+    Only add CIDRs you control to `FIREWALL_TRUSTED_PROXY_CIDRS`.
+  </Card>
+  
+  <Card title="Regular Audits" icon="list-check">
+    Periodically review the allowlist and remove stale IPs.
+  </Card>
+  
+  <Card title="Monitor Logs" icon="chart-line">
+    Watch for `ip_forbidden` errors to detect unauthorized access attempts.
+  </Card>
+</CardGroup>
+
+## Firewall vs Dashboard Auth
+
+| Feature | Firewall | Dashboard Auth |
+|---------|----------|----------------|
+| Protects | API endpoints (`/v1`, `/backend-api`) | Dashboard UI (`/`, `/api`) |
+| Method | IP allowlist | Password + TOTP |
+| Granularity | Per IP | Per user |
+| Overhead | Minimal | Session cookies |
+
+<Tip>
+**Recommended setup for production:**
+
+1. Enable firewall to restrict API access by IP
+2. Enable dashboard authentication (password + TOTP)
+3. Use API keys for programmatic access
+4. Run behind HTTPS reverse proxy
+
+This provides multiple layers of security.
+</Tip>
+
+## Troubleshooting
+
+### Dashboard Accessible, API Blocked
+
+**Expected behavior**. The dashboard (`/api/*`) is not protected by the firewall.
+
+Add your IP to access API endpoints:
+
+```bash
+curl -X POST http://localhost:2455/api/firewall/ips \
+  -d '{"ipAddress": "YOUR_IP"}'
+```
+
+### Real IP Not Detected Behind Proxy
+
+Verify:
+
+1. `FIREWALL_TRUST_PROXY_HEADERS=true`
+2. Proxy IP is in `FIREWALL_TRUSTED_PROXY_CIDRS`
+3. Proxy is sending `X-Forwarded-For` header
+
+Debug:
+
+```bash
+# Check what IP Codex-LB sees
+curl -v http://localhost:2455/v1/models
+# Look for X-Forwarded-For in nginx logs
+```
+
+### Locked Out After Enabling Firewall
+
+You can still access the dashboard at `http://localhost:2455` (firewall doesn't protect dashboard routes).
+
+1. Go to Settings → Firewall
+2. Remove all IPs to disable allowlist mode
+3. Or add your current IP
+
+If dashboard auth is also locked, access the database directly:
+
+```sql
+-- SQLite
+sqlite3 ~/.codex-lb/store.db "DELETE FROM api_firewall_allowlist;"
+
+-- PostgreSQL
+psql -U codex_lb -c "DELETE FROM api_firewall_allowlist;"
+```

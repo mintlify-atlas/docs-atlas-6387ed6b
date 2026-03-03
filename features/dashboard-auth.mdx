@@ -1,0 +1,596 @@
+---
+title: Dashboard Authentication
+description: Secure your Codex-LB dashboard with password and TOTP two-factor authentication
+---
+
+## Overview
+
+Codex-LB supports multi-layered authentication for the admin dashboard:
+
+- **Password authentication** - bcrypt-hashed password stored in database
+- **TOTP (Time-based One-Time Password)** - Optional 2FA using authenticator apps
+- **Session management** - 12-hour encrypted session cookies
+- **Rate limiting** - Protection against brute-force attacks
+
+By default, **authentication is disabled** for easy first-time setup. Once configured, all `/api/*` endpoints (except auth endpoints) require valid authentication.
+
+<Note>
+API key authentication (for proxy endpoints) and dashboard authentication (for admin endpoints) are separate systems. See [API Keys](/features/api-keys) for proxy authentication.
+</Note>
+
+## Password Authentication
+
+### Initial Setup
+
+On first launch, the dashboard is **open** (no authentication required). Set up password protection:
+
+1. Navigate to **Settings** → **Security**
+2. Click **Setup Password**
+3. Enter a strong password (minimum 8 characters)
+4. Click **Save**
+
+From `app/modules/dashboard_auth/service.py:210-213`:
+
+```python
+async def setup_password(self, password: str) -> None:
+    setup_ok = await self._repository.try_set_password_hash(_hash_password(password))
+    if not setup_ok:
+        raise PasswordAlreadyConfiguredError("Password is already configured")
+```
+
+Password is hashed using bcrypt:
+
+```python
+# From app/modules/dashboard_auth/service.py:337-338
+def _hash_password(password: str) -> str:
+    return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+```
+
+<Warning>
+Password setup is a one-time operation. Once configured, you must use the password change flow to update it.
+</Warning>
+
+### Logging In
+
+Once password is configured, the dashboard requires authentication:
+
+1. Navigate to dashboard URL
+2. Enter password in login form
+3. Click **Sign In**
+4. Receive 12-hour session cookie
+
+**API endpoint**:
+```bash
+POST /api/dashboard-auth/password/login
+```
+```json
+{
+  "password": "your-password"
+}
+```
+
+**Response**:
+```json
+{
+  "authenticated": true,
+  "password_required": true,
+  "totp_required_on_login": false,
+  "totp_configured": false
+}
+```
+
+Sets cookie: `codex_lb_dashboard_session` (httponly, secure, samesite=lax, 12h expiry)
+
+### Session Management
+
+Sessions are encrypted using Fernet (symmetric encryption):
+
+```python
+# From app/modules/dashboard_auth/service.py:95-101
+def create(self, *, password_verified: bool, totp_verified: bool) -> str:
+    expires_at = int(time()) + _SESSION_TTL_SECONDS  # 12 hours
+    payload = json.dumps(
+        {"exp": expires_at, "pw": password_verified, "tv": totp_verified},
+        separators=(",", ":"),
+    )
+    return self._get_encryptor().encrypt(payload).decode("ascii")
+```
+
+**Session payload**:
+- `exp`: Expiration timestamp
+- `pw`: Password verified (boolean)
+- `tv`: TOTP verified (boolean)
+
+From `app/modules/dashboard_auth/service.py:18-19`:
+
+```python
+DASHBOARD_SESSION_COOKIE = "codex_lb_dashboard_session"
+_SESSION_TTL_SECONDS = 12 * 60 * 60  # 12 hours
+```
+
+### Changing Password
+
+**Requirements**: Valid authenticated session
+
+```bash
+POST /api/dashboard-auth/password/change
+```
+```json
+{
+  "current_password": "old-password",
+  "new_password": "new-password"
+}
+```
+
+From `app/modules/dashboard_auth/service.py:222-224`:
+
+```python
+async def change_password(self, current_password: str, new_password: str) -> None:
+    await self.verify_password(current_password)
+    await self._repository.set_password_hash(_hash_password(new_password))
+```
+
+### Removing Password
+
+To return to unauthenticated mode:
+
+```bash
+DELETE /api/dashboard-auth/password
+```
+```json
+{
+  "password": "current-password"
+}
+```
+
+From `app/modules/dashboard_auth/service.py:226-228`:
+
+```python
+async def remove_password(self, password: str) -> None:
+    await self.verify_password(password)
+    await self._repository.clear_password_and_totp()  # Also clears TOTP!
+```
+
+<Warning>
+Removing password also disables TOTP and clears the secret. This returns the system to completely unauthenticated mode.
+</Warning>
+
+## TOTP Two-Factor Authentication
+
+### Prerequisites
+
+TOTP requires an active password session. You cannot enable TOTP without first configuring password auth.
+
+### Setting Up TOTP
+
+1. Log in with password
+2. Navigate to **Settings** → **Security** → **Two-Factor Authentication**
+3. Click **Enable TOTP**
+4. Scan QR code with authenticator app (Google Authenticator, Authy, 1Password, etc.)
+5. Enter 6-digit code from app
+6. Click **Verify**
+
+**API flow**:
+
+**Step 1: Start setup**
+```bash
+POST /api/dashboard-auth/totp/setup/start
+```
+
+**Response**:
+```json
+{
+  "secret": "JBSWY3DPEHPK3PXP",
+  "otpauth_uri": "otpauth://totp/codex-lb:dashboard?secret=JBSWY3DPEHPK3PXP&issuer=codex-lb",
+  "qr_svg_data_uri": "data:image/svg+xml;base64,..."
+}
+```
+
+From `app/modules/dashboard_auth/service.py:246-256`:
+
+```python
+async def start_totp_setup(self, *, session_id: str | None) -> TotpSetupStartResponse:
+    settings = await self._require_active_password_session(session_id)
+    if settings.totp_secret_encrypted is not None:
+        raise TotpAlreadyConfiguredError("TOTP is already configured...")
+    secret = generate_totp_secret()  # 32-char base32 secret
+    otpauth_uri = build_otpauth_uri(secret, issuer=_TOTP_ISSUER, account_name=_TOTP_ACCOUNT)
+    return TotpSetupStartResponse(
+        secret=secret,
+        otpauth_uri=otpauth_uri,
+        qr_svg_data_uri=_qr_svg_data_uri(otpauth_uri),  # SVG QR code as data URI
+    )
+```
+
+**Step 2: Confirm setup**
+```bash
+POST /api/dashboard-auth/totp/setup/confirm
+```
+```json
+{
+  "secret": "JBSWY3DPEHPK3PXP",
+  "code": "123456"
+}
+```
+
+Verifies the code and stores encrypted secret:
+
+```python
+# From app/modules/dashboard_auth/service.py:258-268
+async def confirm_totp_setup(self, *, session_id: str | None, secret: str, code: str) -> None:
+    current = await self._require_active_password_session(session_id)
+    if current.totp_secret_encrypted is not None:
+        raise TotpAlreadyConfiguredError("TOTP is already configured...")
+    verification = verify_totp_code(secret, code, window=1)
+    if not verification.is_valid:
+        raise TotpInvalidCodeError("Invalid TOTP code")
+    await self._repository.set_totp_secret(self._encryptor.encrypt(secret))
+```
+
+<Note>
+TOTP uses standard 6-digit codes, 30-second time steps, SHA-1 algorithm, and window=1 (accepts codes from previous/current/next time step for clock skew tolerance).
+</Note>
+
+### Logging In with TOTP
+
+Once TOTP is configured **and** `totp_required_on_login` is enabled:
+
+1. Enter password → Creates session with `pw=true, tv=false`
+2. Dashboard shows TOTP prompt
+3. Enter 6-digit code from authenticator app
+4. Upgrades session to `pw=true, tv=true`
+
+**TOTP verification**:
+```bash
+POST /api/dashboard-auth/totp/verify
+```
+```json
+{
+  "code": "123456"
+}
+```
+
+From `app/modules/dashboard_auth/service.py:270-287`:
+
+```python
+async def verify_totp(self, *, session_id: str | None, code: str) -> str:
+    settings = await self._require_active_password_session(session_id)
+    secret_encrypted = settings.totp_secret_encrypted
+    if secret_encrypted is None:
+        raise TotpNotConfiguredError("TOTP is not configured")
+    secret = self._encryptor.decrypt(secret_encrypted)
+    verification = verify_totp_code(
+        secret,
+        code,
+        window=1,
+        last_verified_step=settings.totp_last_verified_step,  # Replay protection
+    )
+    if not verification.is_valid or verification.matched_step is None:
+        raise TotpInvalidCodeError("Invalid TOTP code")
+    updated = await self._repository.try_advance_totp_last_verified_step(verification.matched_step)
+    if not updated:
+        raise TotpInvalidCodeError("Invalid TOTP code")
+    return self._session_store.create(password_verified=True, totp_verified=True)
+```
+
+**Replay protection**: The `totp_last_verified_step` field prevents reusing codes. Each time step is a 30-second counter, and the system tracks the most recent verified step.
+
+### Disabling TOTP
+
+**Requirements**: TOTP-verified session
+
+```bash
+POST /api/dashboard-auth/totp/disable
+```
+```json
+{
+  "code": "123456"  // Current valid TOTP code required
+}
+```
+
+From `app/modules/dashboard_auth/service.py:289-306`:
+
+```python
+async def disable_totp(self, *, session_id: str | None, code: str) -> None:
+    settings = await self._require_totp_verified_session(session_id)
+    secret_encrypted = settings.totp_secret_encrypted
+    if secret_encrypted is None:
+        raise TotpNotConfiguredError("TOTP is not configured")
+    secret = self._encryptor.decrypt(secret_encrypted)
+    verification = verify_totp_code(
+        secret,
+        code,
+        window=1,
+        last_verified_step=settings.totp_last_verified_step,
+    )
+    if not verification.is_valid or verification.matched_step is None:
+        raise TotpInvalidCodeError("Invalid TOTP code")
+    # ... verify and clear TOTP secret
+    await self._repository.set_totp_secret(None)
+```
+
+## Authentication Guard
+
+### Scope
+
+Authentication is enforced on all `/api/*` routes except:
+
+- `/api/dashboard-auth/*` (auth endpoints themselves)
+- `/api/codex/usage` (uses separate bearer caller identity validation)
+
+### Guard Logic
+
+From `openspec/specs/admin-auth/spec.md:84-96`:
+
+> Authentication required condition: the system SHALL evaluate `password_hash` and `totp_required_on_login` together to determine whether authentication is required. When `password_hash` is NULL **and** `totp_required_on_login` is false, the guard MUST allow all requests (unauthenticated mode). When either `password_hash` is set **or** `totp_required_on_login` is true, the guard MUST require a valid session.
+
+**Session validation steps** when `requires_auth` is true:
+1. Valid session cookie must be present (else 401)
+2. If `password_hash` is not NULL, session must have `password_verified=true`
+3. If `totp_required_on_login` is true, session must have `totp_verified=true`
+
+From `app/modules/dashboard_auth/service.py:187-208`:
+
+```python
+async def get_session_state(self, session_id: str | None) -> DashboardAuthSessionResponse:
+    settings = await self._repository.get_settings()
+    password_required = settings.password_hash is not None
+    totp_required = password_required and settings.totp_required_on_login
+    totp_configured = settings.totp_secret_encrypted is not None
+    state = self._session_store.get(session_id) if password_required else None
+    password_authenticated = bool(state and state.password_verified)
+    
+    if not password_required:
+        authenticated = True  # Unauthenticated mode
+    elif totp_required:
+        authenticated = bool(state and state.password_verified and state.totp_verified)
+    else:
+        authenticated = password_authenticated
+
+    # Surface TOTP prompt only for password-authenticated sessions
+    totp_required_on_login = bool(totp_required and password_authenticated)
+    return DashboardAuthSessionResponse(
+        authenticated=authenticated,
+        password_required=password_required,
+        totp_required_on_login=totp_required_on_login,
+        totp_configured=totp_configured,
+    )
+```
+
+### Session State Endpoint
+
+Check current authentication state:
+
+```bash
+GET /api/dashboard-auth/session
+```
+
+**Response (unauthenticated mode)**:
+```json
+{
+  "authenticated": true,
+  "password_required": false,
+  "totp_required_on_login": false,
+  "totp_configured": false
+}
+```
+
+**Response (password set, not logged in)**:
+```json
+{
+  "authenticated": false,
+  "password_required": true,
+  "totp_required_on_login": false,
+  "totp_configured": false
+}
+```
+
+**Response (logged in with password, TOTP pending)**:
+```json
+{
+  "authenticated": false,
+  "password_required": true,
+  "totp_required_on_login": true,
+  "totp_configured": true
+}
+```
+
+**Response (fully authenticated with TOTP)**:
+```json
+{
+  "authenticated": true,
+  "password_required": true,
+  "totp_required_on_login": false,  // Already verified in this session
+  "totp_configured": true
+}
+```
+
+## Rate Limiting
+
+Both password and TOTP login attempts are rate-limited:
+
+```python
+# From app/modules/dashboard_auth/service.py:312-326
+_totp_rate_limiter = TotpRateLimiter(max_failures=8, window_seconds=60)
+_password_rate_limiter = TotpRateLimiter(max_failures=8, window_seconds=60)
+```
+
+**Limits**: 8 failures per 60-second window
+
+**Rate limit logic** (from `app/modules/dashboard_auth/service.py:143-178`):
+
+```python
+def check(self, key: str) -> int | None:
+    now = int(time())
+    failures = self._failures.get(key)
+    if failures is None:
+        return None
+    cutoff = now - self._window_seconds
+    while failures and failures[0] <= cutoff:
+        failures.popleft()  # Remove old failures outside window
+    if not failures:
+        self._failures.pop(key, None)
+        return None
+    if len(failures) >= self._max_failures:
+        retry_after = failures[0] + self._window_seconds - now
+        return max(1, retry_after)
+    return None
+```
+
+**On rate limit breach**:
+- HTTP Status: `429 Too Many Requests`
+- Header: `Retry-After: {seconds}`
+- Error: `{"error": {"code": "rate_limit_exceeded", ...}}`
+
+<Warning>
+Rate limit state is stored in-memory and resets on server restart. For production deployments with multiple instances, consider implementing distributed rate limiting.
+</Warning>
+
+## Settings Cache
+
+To avoid per-request database queries, settings are cached:
+
+From `openspec/specs/admin-auth/spec.md:179-192`:
+
+> The system SHALL cache `DashboardSettings` in memory with a TTL of 5 seconds to avoid per-request DB queries in the auth guard. The cache MUST be invalidated immediately when settings are modified via the settings API or password/TOTP management endpoints.
+
+**Cache behavior**:
+- **TTL**: 5 seconds
+- **Invalidation**: Immediate on setting changes
+- **Benefit**: Reduces DB load on high-traffic dashboards
+
+## Logout
+
+```bash
+POST /api/dashboard-auth/logout
+```
+
+Clears session cookie (server-side no-op since sessions are stateless/encrypted).
+
+From `app/modules/dashboard_auth/service.py:308-309`:
+
+```python
+def logout(self, session_id: str | None) -> None:
+    self._session_store.delete(session_id)  # Stateless: client-side cookie clear
+```
+
+## Security Best Practices
+
+### Strong Passwords
+
+- Minimum 8 characters (enforced)
+- Recommended: 12+ characters with mixed case, numbers, symbols
+- Use a password manager
+
+### Enable TOTP
+
+Always enable TOTP for production deployments:
+
+1. Setup password
+2. Configure TOTP
+3. Enable **Settings** → **Require TOTP on Login**
+
+<Tip>
+TOTP adds a second factor even if password is compromised. Highly recommended for production.
+</Tip>
+
+### Network Security
+
+- **HTTPS**: Always run behind HTTPS in production
+- **Firewall**: Restrict dashboard access to trusted IPs
+- **Reverse proxy**: Use nginx/Caddy for TLS termination
+
+### Session Security
+
+Sessions use Fernet encryption with a key derived from environment:
+
+```python
+# From app/core/crypto.py (implied)
+# Encryption key derived from ENCRYPTION_KEY or SECRET_KEY environment variable
+```
+
+**Environment variables**:
+```bash
+# Generate secure key:
+python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+
+# Set in environment:
+export ENCRYPTION_KEY="your-generated-key-here"
+```
+
+<Warning>
+If `ENCRYPTION_KEY` changes, all existing sessions are invalidated. Users must re-login.
+</Warning>
+
+## Troubleshooting
+
+### Locked Out (Forgot Password)
+
+If you forget the password:
+
+**Option 1: Reset via database**
+```sql
+UPDATE dashboard_settings 
+SET password_hash = NULL, totp_secret_encrypted = NULL, totp_required_on_login = false 
+WHERE id = 1;
+```
+
+This returns to unauthenticated mode.
+
+**Option 2: Set new password hash**
+```python
+# Generate new hash
+import bcrypt
+new_hash = bcrypt.hashpw(b"new-password", bcrypt.gensalt()).decode("utf-8")
+print(new_hash)
+```
+
+Then update database:
+```sql
+UPDATE dashboard_settings SET password_hash = '$2b$12$...' WHERE id = 1;
+```
+
+### TOTP Code Not Working
+
+**Causes**:
+- Clock skew between server and authenticator app
+- Wrong secret scanned
+- Code already used (replay protection)
+
+**Solutions**:
+1. Ensure server and device clocks are synced (NTP)
+2. Re-scan QR code in authenticator app
+3. Wait for next 30-second window
+
+### Rate Limited
+
+**Symptom**: `429 Too Many Requests`
+
+**Cause**: 8 failed login attempts in 60 seconds
+
+**Solution**: Wait for the `Retry-After` duration (shown in error response)
+
+### Session Expired
+
+**Symptom**: Dashboard redirects to login after 12 hours
+
+**Cause**: Normal session TTL behavior
+
+**Solution**: Log in again. Consider increasing `_SESSION_TTL_SECONDS` in code if needed.
+
+## Related Features
+
+- [API Keys](/features/api-keys) - Authenticate proxy requests (separate from dashboard auth)
+- [Account Pooling](/features/account-pooling) - Manage pooled accounts
+- [Usage Tracking](/features/usage-tracking) - Monitor dashboard activity
+
+## Technical Reference
+
+Key source files:
+
+- `app/modules/dashboard_auth/service.py` - Auth business logic
+- `app/modules/dashboard_auth/repository.py` - Database operations
+- `app/modules/dashboard_auth/schemas.py` - API schemas
+- `app/core/auth/totp.py` - TOTP implementation
+- `app/core/crypto.py` - Encryption utilities
+- `openspec/specs/admin-auth/spec.md` - Detailed specification

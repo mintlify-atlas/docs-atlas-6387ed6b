@@ -1,0 +1,660 @@
+---
+title: API Key Management
+description: Secure your Codex-LB deployment with API keys, rate limits, and model restrictions
+---
+
+## Overview
+
+Codex-LB supports API key authentication to control access to your load balancer. Each key can have:
+
+- **Model restrictions** - Limit which models can be accessed
+- **Rate limits** - Token, request, and cost limits per day/week/month
+- **Expiration dates** - Automatic key deactivation
+- **Usage tracking** - Monitor consumption per key
+
+<Note>
+API key authentication is **disabled by default**. Enable it via Settings → API Key Auth Enabled.
+</Note>
+
+## Creating API Keys
+
+### Via Dashboard
+
+1. Navigate to **Settings** → **API Keys**
+2. Click **Create API Key**
+3. Configure:
+   - **Name**: Descriptive label (e.g., "Production App")
+   - **Allowed Models**: Leave empty for all models, or select specific models
+   - **Expiration**: Optional expiration date
+   - **Limits**: Add rate limits (see [Rate Limits](#rate-limits))
+4. Click **Create**
+5. **Copy the key immediately** - it won't be shown again!
+
+### Via API
+
+```bash
+curl -X POST http://localhost:8000/api/api-keys \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Production App",
+    "allowed_models": ["gpt-4o", "gpt-4o-mini"],
+    "expires_at": "2025-12-31T23:59:59Z",
+    "limits": [
+      {
+        "limit_type": "total_tokens",
+        "limit_window": "daily",
+        "max_value": 1000000
+      }
+    ]
+  }'
+```
+
+**Response**:
+```json
+{
+  "id": "550e8400-e29b-41d4-a716-446655440000",
+  "name": "Production App",
+  "key": "sk-clb-a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6q7r8s9t0u1v2w3x4y5z6",
+  "key_prefix": "sk-clb-a1b2c3d",
+  "allowed_models": ["gpt-4o", "gpt-4o-mini"],
+  "expires_at": "2025-12-31T23:59:59Z",
+  "is_active": true,
+  "created_at": "2024-12-31T15:30:00Z",
+  "last_used_at": null,
+  "limits": [
+    {
+      "id": 1,
+      "limit_type": "total_tokens",
+      "limit_window": "daily",
+      "max_value": 1000000,
+      "current_value": 0,
+      "model_filter": null,
+      "reset_at": "2025-01-01T00:00:00Z"
+    }
+  ]
+}
+```
+
+<Warning>
+The `key` field contains the full API key and is only returned once on creation. Store it securely!
+</Warning>
+
+### Key Format
+
+API keys follow this format:
+
+```
+sk-clb-{48 hex characters}
+```
+
+Example: `sk-clb-a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6q7r8s9t0u1v2w3x4y5z6`
+
+**Storage**: Only the SHA-256 hash is stored in the database (from `app/modules/api_keys/service.py:512-513`):
+
+```python
+def _hash_key(plain_key: str) -> str:
+    return sha256(plain_key.encode("utf-8")).hexdigest()
+```
+
+## Using API Keys
+
+### Authentication Header
+
+Include the key in the `Authorization` header:
+
+```bash
+curl -X POST http://localhost:8000/v1/chat/completions \
+  -H "Authorization: Bearer sk-clb-a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6q7r8s9t0u1v2w3x4y5z6" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "gpt-4o",
+    "messages": [{"role": "user", "content": "Hello!"}]
+  }'
+```
+
+### Scope
+
+API key authentication applies to:
+
+- `/v1/*` (OpenAI-compatible endpoints)
+- `/backend-api/codex/*` (ChatGPT-compatible endpoints)
+- `/backend-api/transcribe` (Transcription endpoint)
+
+**Excluded**:
+- `/api/*` (Dashboard API - uses session auth)
+- `/api/codex/usage` (Uses bearer caller identity, not API keys)
+
+## Model Restrictions
+
+### Configuring Allowed Models
+
+When creating or updating a key:
+
+```json
+{
+  "allowed_models": ["gpt-4o", "gpt-4o-mini"]
+}
+```
+
+- **Empty/null**: All models allowed
+- **Specific list**: Only listed models allowed
+
+### Enforcement
+
+Model restrictions are enforced in the proxy service layer:
+
+```python
+# From openspec/specs/api-keys/spec.md:132-144
+# When allowed_models is set and requested model is not in the list,
+# the system MUST reject the request.
+```
+
+**Error response**:
+```json
+{
+  "error": {
+    "code": "model_not_allowed",
+    "message": "This API key does not have access to model 'gpt-4o-pro'"
+  }
+}
+```
+HTTP Status: `403 Forbidden`
+
+### Model List Filtering
+
+`GET /v1/models` automatically filters based on the authenticated key:
+
+```bash
+curl http://localhost:8000/v1/models \
+  -H "Authorization: Bearer sk-clb-..."
+```
+
+Returns only models in the key's `allowed_models` list.
+
+### Fixed-Model Endpoints
+
+For endpoints with implicit models (e.g., transcription):
+
+```python
+# From openspec/specs/api-keys/spec.md:134-135
+# For fixed-model endpoints, evaluate restrictions against 
+# fixed effective model gpt-4o-transcribe
+```
+
+Transcription endpoints use model `gpt-4o-transcribe` for restriction checks.
+
+## Rate Limits
+
+### Limit Types
+
+Codex-LB supports four limit types:
+
+```python
+# From app/db/models.py:173-177
+class LimitType(str, Enum):
+    TOTAL_TOKENS = "total_tokens"        # Input + output tokens
+    INPUT_TOKENS = "input_tokens"        # Input tokens only
+    OUTPUT_TOKENS = "output_tokens"      # Output tokens only
+    COST_USD = "cost_usd"                # Cost in microdollars
+```
+
+### Limit Windows
+
+```python
+# From app/db/models.py:180-183
+class LimitWindow(str, Enum):
+    DAILY = "daily"      # Resets every 24 hours
+    WEEKLY = "weekly"    # Resets every 7 days
+    MONTHLY = "monthly"  # Resets every 30 days
+```
+
+### Creating Limits
+
+**Example: Daily token limit**
+```json
+{
+  "limit_type": "total_tokens",
+  "limit_window": "daily",
+  "max_value": 1000000
+}
+```
+
+**Example: Weekly cost limit**
+```json
+{
+  "limit_type": "cost_usd",
+  "limit_window": "weekly",
+  "max_value": 50000000  // $50 (in microdollars)
+}
+```
+
+**Example: Model-specific limit**
+```json
+{
+  "limit_type": "total_tokens",
+  "limit_window": "daily",
+  "max_value": 100000,
+  "model_filter": "gpt-4o"  // Only applies to gpt-4o
+}
+```
+
+<Tip>
+Combine global and model-specific limits for granular control. Example: 10M tokens/day globally, but only 1M tokens/day for expensive models.
+</Tip>
+
+### Limit Enforcement
+
+Limits are enforced using a **reservation system** to prevent races:
+
+```python
+# From app/modules/api_keys/service.py:314-371
+async def enforce_limits_for_request(
+    self,
+    key_id: str,
+    *,
+    request_model: str | None,
+) -> ApiKeyUsageReservationData:
+    # 1. Get current limit states
+    # 2. Pre-reserve pessimistic quota
+    # 3. Create usage reservation
+    # 4. If successful, proceed with request
+    # 5. After request, settle actual usage
+```
+
+**Reservation flow**:
+
+1. **Before request**: Reserve estimated usage (8,192 tokens for token limits, $2 for cost limits)
+2. **Process request**: Forward to upstream API
+3. **After response**: Adjust reservation to actual usage
+4. **On error**: Release reservation
+
+From `app/modules/api_keys/service.py:584-601`:
+
+```python
+def _reserve_budget_for_limit_type(limit_type: LimitType) -> int:
+    if limit_type == LimitType.TOTAL_TOKENS:
+        return 8_192
+    if limit_type == LimitType.INPUT_TOKENS:
+        return 8_192
+    if limit_type == LimitType.OUTPUT_TOKENS:
+        return 8_192
+    if limit_type == LimitType.COST_USD:
+        return 2_000_000  # $2 in microdollars
+    return 1
+```
+
+<Note>
+Reservations prevent over-limit requests from starting, even under high concurrency. Actual usage is settled after the response, refunding unused quota.
+</Note>
+
+### Limit Applicability
+
+From `openspec/specs/api-keys/spec.md:223-232`:
+
+- **`model_filter=null`**: Applies to all requests (global limit)
+- **`model_filter="gpt-4o"`**: Applies only to `gpt-4o` requests
+- **Model-less endpoints** (e.g., `/v1/models`): Only global limits apply
+
+**Example scenario**:
+
+Key has two limits:
+1. `total_tokens=1M/day, model_filter=null` (global)
+2. `total_tokens=100K/day, model_filter="gpt-4o"` (model-specific)
+
+Request for `gpt-4o`: **Both limits enforced**
+Request for `gpt-4o-mini`: **Only global limit enforced**
+
+### Exceeding Limits
+
+**Error response**:
+```json
+{
+  "error": {
+    "code": "rate_limit_exceeded",
+    "message": "API key total_tokens daily limit exceeded for model gpt-4o"
+  }
+}
+```
+HTTP Status: `429 Too Many Requests`
+Header: `Retry-After: 3600` (seconds until reset)
+
+### Automatic Reset
+
+Limits reset using **lazy evaluation**:
+
+```python
+# From app/modules/api_keys/service.py:551-565
+async def _lazy_reset_expired_limits(
+    repository: ApiKeysRepositoryProtocol,
+    limits: list[ApiKeyLimit],
+    *,
+    now: datetime,
+) -> None:
+    for limit in limits:
+        if limit.reset_at >= now:
+            continue
+        new_reset_at = _advance_reset(limit.reset_at, now, limit.limit_window)
+        await repository.reset_limit(
+            limit.id,
+            expected_reset_at=limit.reset_at,
+            new_reset_at=new_reset_at,
+        )
+```
+
+**Reset timing**:
+
+```python
+# From app/modules/api_keys/service.py:738-745
+def _next_reset(now: datetime, window: LimitWindow) -> datetime:
+    if window == LimitWindow.DAILY:
+        return now + timedelta(days=1)
+    if window == LimitWindow.WEEKLY:
+        return now + timedelta(days=7)
+    if window == LimitWindow.MONTHLY:
+        return now + timedelta(days=30)
+```
+
+Resets happen on next key validation after `reset_at` timestamp passes.
+
+## Managing API Keys
+
+### Listing Keys
+
+```bash
+GET /api/api-keys
+```
+
+**Response**:
+```json
+[
+  {
+    "id": "550e8400-e29b-41d4-a716-446655440000",
+    "name": "Production App",
+    "key_prefix": "sk-clb-a1b2c3d",
+    "allowed_models": ["gpt-4o"],
+    "expires_at": "2025-12-31T23:59:59Z",
+    "is_active": true,
+    "created_at": "2024-12-31T15:30:00Z",
+    "last_used_at": "2024-12-31T16:45:00Z",
+    "limits": [
+      {
+        "id": 1,
+        "limit_type": "total_tokens",
+        "limit_window": "daily",
+        "max_value": 1000000,
+        "current_value": 450000,
+        "model_filter": null,
+        "reset_at": "2025-01-01T00:00:00Z"
+      }
+    ]
+  }
+]
+```
+
+<Note>
+The full key is never returned after creation. Only `key_prefix` (first 15 characters) is shown.
+</Note>
+
+### Updating Keys
+
+```bash
+PATCH /api/api-keys/{id}
+```
+
+**Updatable fields**:
+- `name`
+- `allowed_models`
+- `expires_at`
+- `is_active`
+- `limits`
+
+**Example: Add a new limit**
+```json
+{
+  "limits": [
+    {
+      "limit_type": "total_tokens",
+      "limit_window": "daily",
+      "max_value": 2000000
+    },
+    {
+      "limit_type": "cost_usd",
+      "limit_window": "weekly",
+      "max_value": 100000000
+    }
+  ]
+}
+```
+
+**State preservation**: From `openspec/specs/api-keys/spec.md:259-265`:
+
+> When updating API key limits, the system SHALL preserve existing usage state (`current_value`, `reset_at`) for unchanged limit rules. Limit comparison key is `(limit_type, limit_window, model_filter)`.
+
+Existing limits retain their counters; only new or modified limits reset.
+
+### Disabling Keys
+
+```bash
+PATCH /api/api-keys/{id}
+```
+```json
+{
+  "is_active": false
+}
+```
+
+Disabled keys:
+- Return `401 Unauthorized` on use
+- Remain in database for audit trail
+- Can be re-enabled by setting `is_active: true`
+
+### Regenerating Keys
+
+If a key is compromised:
+
+```bash
+POST /api/api-keys/{id}/regenerate
+```
+
+**Response**: New key with same ID, name, and limits:
+```json
+{
+  "id": "550e8400-e29b-41d4-a716-446655440000",
+  "key": "sk-clb-x9y8z7w6v5u4t3s2r1q0p9o8n7m6l5k4j3i2h1g0f9e8d7c6b5a4",
+  "key_prefix": "sk-clb-x9y8z7w",
+  ...
+}
+```
+
+Old key immediately stops working.
+
+### Deleting Keys
+
+```bash
+DELETE /api/api-keys/{id}
+```
+
+Permanently removes key and all associated limits. HTTP 204 on success.
+
+## Usage Tracking
+
+Every API request records usage:
+
+```python
+# From app/modules/api_keys/service.py:477-498
+async def record_usage(
+    self,
+    key_id: str,
+    *,
+    model: str,
+    input_tokens: int,
+    output_tokens: int,
+    cached_input_tokens: int = 0,
+) -> None:
+    cost_microdollars = _calculate_cost_microdollars(
+        model,
+        input_tokens,
+        output_tokens,
+        cached_input_tokens,
+    )
+    await self._repository.increment_limit_usage(
+        key_id,
+        model=model,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        cost_microdollars=cost_microdollars,
+    )
+```
+
+**`RequestLog` association**: From `openspec/specs/api-keys/spec.md:194-206`:
+
+> The system SHALL record the `api_key_id` in the `request_logs` table for proxy requests authenticated with an API key.
+
+View per-key request history:
+
+```sql
+SELECT * FROM request_logs WHERE api_key_id = '550e8400-...';
+```
+
+## Security Best Practices
+
+### Key Rotation
+
+1. Create new key with desired settings
+2. Update applications to use new key
+3. Monitor old key's `last_used_at` timestamp
+4. Delete old key after migration complete
+
+**Recommended rotation frequency**: Every 90 days
+
+### Principle of Least Privilege
+
+- **Model restrictions**: Limit keys to only required models
+- **Rate limits**: Set limits matching expected usage + margin
+- **Expiration**: Use expiration dates for temporary access
+
+**Example: Frontend key**
+```json
+{
+  "name": "Public Web App",
+  "allowed_models": ["gpt-4o-mini"],  // Cheapest model only
+  "limits": [
+    {
+      "limit_type": "cost_usd",
+      "limit_window": "daily",
+      "max_value": 10000000  // $10/day cap
+    }
+  ]
+}
+```
+
+### Monitoring
+
+Set up alerts for:
+- Keys approaching limits (>80% utilization)
+- Keys with no recent usage (potential leak)
+- Unusual traffic patterns (rapid usage spikes)
+- 429 errors (limit exceeded)
+
+### Revoking Compromised Keys
+
+If a key is exposed:
+
+1. **Immediately disable** via `PATCH` with `is_active: false`
+2. Investigate usage logs for unauthorized activity
+3. Regenerate or create new key
+4. Update legitimate applications
+5. Delete old key after verification
+
+<Warning>
+Disabling API key auth while keys exist is dangerous. Keys remain valid but the enforcement check is skipped. Delete all keys before disabling auth.
+</Warning>
+
+## Global API Key Authentication
+
+### Enabling Authentication
+
+API key authentication is controlled via settings:
+
+```bash
+PUT /api/settings
+```
+```json
+{
+  "api_key_auth_enabled": true
+}
+```
+
+When enabled:
+- All proxy requests require valid API key
+- Dashboard API still uses session auth
+- Missing or invalid keys return `401 Unauthorized`
+
+### Disabling Authentication
+
+```json
+{
+  "api_key_auth_enabled": false
+}
+```
+
+When disabled:
+- Proxy requests allowed without authentication
+- Existing keys remain in database but aren't enforced
+- No usage tracking or rate limiting
+
+<Tip>
+Leave API key auth disabled during initial setup and testing. Enable it before exposing Codex-LB to external networks.
+</Tip>
+
+## Troubleshooting
+
+### 401 Unauthorized
+
+**Causes**:
+- Missing `Authorization` header
+- Invalid key format
+- Key deleted or disabled
+- Key expired
+
+**Solution**: Check key is active, not expired, and header is correctly formatted.
+
+### 403 Model Not Allowed
+
+**Causes**:
+- Requested model not in `allowed_models`
+- Model filter typo
+
+**Solution**: Update key's `allowed_models` or use a different model.
+
+### 429 Rate Limit Exceeded
+
+**Causes**:
+- Hit daily/weekly/monthly limit
+- Multiple limits stacked (global + model-specific)
+
+**Solution**: Wait for reset (check `Retry-After` header) or increase limits.
+
+### Limits Not Resetting
+
+**Causes**:
+- Reset logic runs on next validation (lazy)
+- Clock drift on server
+
+**Solution**: Trigger a request with the key to force reset check, or manually adjust `reset_at` in database.
+
+## Related Features
+
+- [Dashboard Auth](/features/dashboard-auth) - Protect the admin dashboard
+- [Usage Tracking](/features/usage-tracking) - Monitor account consumption
+- [Load Balancing](/features/load-balancing) - Account selection strategies
+
+## Technical Reference
+
+Key source files:
+
+- `app/modules/api_keys/service.py` - API key business logic
+- `app/modules/api_keys/repository.py` - Database operations
+- `app/modules/api_keys/schemas.py` - API schemas
+- `app/db/models.py:152-274` - Database models
+- `openspec/specs/api-keys/spec.md` - Detailed specification

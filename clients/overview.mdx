@@ -1,0 +1,144 @@
+---
+title: Client Integration Overview
+description: Connect any OpenAI-compatible client to Codex-LB
+---
+
+Codex-LB provides OpenAI-compatible endpoints that work with any client that supports the OpenAI API. This includes popular CLI tools, IDEs, SDKs, and custom applications.
+
+## Supported Endpoints
+
+Codex-LB exposes two main endpoint types:
+
+<CardGroup cols={2}>
+  <Card title="OpenAI v1" icon="code" href="/api/chat-completions">
+    Standard OpenAI-compatible `/v1` endpoints
+    
+    `http://127.0.0.1:2455/v1`
+  </Card>
+  <Card title="Codex Backend API" icon="terminal" href="/api/codex-responses">
+    Codex-specific `/backend-api/codex` endpoints
+    
+    `http://127.0.0.1:2455/backend-api/codex`
+  </Card>
+</CardGroup>
+
+## Supported Clients
+
+Codex-LB works seamlessly with these popular clients:
+
+| Client | Endpoint | Documentation |
+|--------|----------|---------------|
+| **Codex CLI** | `http://127.0.0.1:2455/backend-api/codex` | [Setup Guide](/clients/codex-cli) |
+| **OpenCode** | `http://127.0.0.1:2455/v1` | [Setup Guide](/clients/opencode) |
+| **OpenClaw** | `http://127.0.0.1:2455/v1` | [Setup Guide](/clients/openclaw) |
+| **OpenAI Python SDK** | `http://127.0.0.1:2455/v1` | [Setup Guide](/clients/openai-sdk) |
+| **Any OpenAI-compatible client** | `http://127.0.0.1:2455/v1` | [API Reference](/api/overview) |
+
+## Authentication
+
+API key authentication is **disabled by default**. When disabled, any client can connect without credentials.
+
+<Info>
+  To enable API key authentication, go to **Settings → API Key Auth** in the dashboard.
+  See [API Key Authentication](/features/api-keys) for details.
+</Info>
+
+When API key auth is enabled:
+
+1. Create an API key in the dashboard (**API Keys → Create**)
+2. Configure your client to pass the key as a Bearer token:
+   ```
+   Authorization: Bearer sk-clb-...
+   ```
+3. The key is shown **only once** at creation — save it securely
+
+## Configuration Pattern
+
+All clients follow a similar setup pattern:
+
+<Steps>
+  <Step title="Set the base URL">
+    Point the client at Codex-LB's endpoint:
+    - `/v1` for OpenAI-compatible clients
+    - `/backend-api/codex` for Codex CLI
+  </Step>
+  
+  <Step title="Configure authentication (optional)">
+    If API key auth is enabled, provide your key:
+    - Via environment variable (recommended)
+    - Directly in config (less secure)
+  </Step>
+  
+  <Step title="Select your model">
+    Use any model available in your Codex-LB instance:
+    - `gpt-5.3-codex`
+    - `gpt-5.3-codex-spark`
+    - Or any custom models you've configured
+  </Step>
+</Steps>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Codex CLI" icon="terminal" href="/clients/codex-cli">
+    Configure the Codex CLI and IDE extensions
+  </Card>
+  <Card title="OpenCode" icon="code" href="/clients/opencode">
+    Set up OpenCode AI coding assistant
+  </Card>
+  <Card title="OpenClaw" icon="sparkles" href="/clients/openclaw">
+    Configure OpenClaw agent framework
+  </Card>
+  <Card title="Python SDK" icon="python" href="/clients/openai-sdk">
+    Use the OpenAI Python SDK with Codex-LB
+  </Card>
+</CardGroup>
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Connection refused errors">
+    Ensure Codex-LB is running and accessible:
+    
+    ```bash
+    # Check if the service is running
+    curl http://127.0.0.1:2455/v1/models
+    ```
+    
+    If using Docker, verify port mappings:
+    ```bash
+    docker ps | grep codex-lb
+    ```
+  </Accordion>
+  
+  <Accordion title="Authentication errors">
+    If you see `401 Unauthorized`:
+    
+    1. Check if API key auth is enabled in Settings
+    2. Verify your API key is valid and not expired
+    3. Ensure the key is passed correctly as a Bearer token
+    4. Check that the key has permission for the requested model
+  </Accordion>
+  
+  <Accordion title="Model not found">
+    If a model isn't available:
+    
+    1. Verify the model exists in your dashboard
+    2. Check that at least one account supports the model
+    3. If using API keys with model restrictions, ensure the key allows that model
+    4. Run model sync: **Settings → Sync Models**
+  </Accordion>
+  
+  <Accordion title="Rate limit errors">
+    If you hit rate limits:
+    
+    1. Check your API key's rate limits in the dashboard
+    2. Review account limits and quotas
+    3. Consider adding more accounts to the pool
+    4. Adjust rate limits in **API Keys → Edit**
+  </Accordion>
+</AccordionGroup>
+
+<Tip>
+  Need help? Check the [Troubleshooting Guide](/guides/troubleshooting) for more common issues and solutions.
+</Tip>

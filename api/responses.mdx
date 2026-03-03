@@ -1,0 +1,519 @@
+---
+title: 'Responses'
+api: 'POST /v1/responses'
+description: 'Create a response using OpenAI Responses API format'
+---
+
+## Overview
+
+The `/v1/responses` endpoint provides OpenAI Responses API compatibility. It accepts structured input with instructions and forwards requests to upstream with proper validation, sanitization, and error handling.
+
+This endpoint supports both streaming and non-streaming modes, handles conversation context, and provides full tool calling capabilities.
+
+## Authentication
+
+<ParamField header="Authorization" type="string" required>
+  Bearer token for API authentication. Format: `Bearer YOUR_API_KEY`
+</ParamField>
+
+## Request Body
+
+<ParamField body="model" type="string" required>
+  ID of the model to use. Must be a valid model slug from the `/v1/models` endpoint.
+  
+  Example: `"gpt-4.1"`, `"gpt-5.2"`
+</ParamField>
+
+<ParamField body="input" type="string | array" required>
+  User input to the model.
+  
+  Can be:
+  - **String**: Plain text input (normalized to single `input_text` item)
+  - **Array**: Structured input items with role-based messages
+  
+  When providing array, each item can have:
+  - `role` (string): `"user"`, `"assistant"`, or `"tool"`
+  - `content` (string | array): Message content
+  - `type` (string): Item type (e.g., `"input_text"`, `"input_image"`, `"function_call_output"`)
+  
+  **Note**: `input_file.file_id` is not supported and will return error.
+</ParamField>
+
+<ParamField body="instructions" type="string">
+  System-level instructions for the model. Equivalent to system/developer messages in Chat Completions.
+</ParamField>
+
+<ParamField body="messages" type="array">
+  Alternative to `input`. Array of chat-formatted messages.
+  
+  **Cannot be used together with `input`**. Provide either `input` or `messages`, not both.
+  
+  Messages are coerced into `instructions` (for system/developer) and `input` items (for user/assistant/tool).
+</ParamField>
+
+<ParamField body="tools" type="array">
+  Array of tool definitions available to the model.
+  
+  Each tool object:
+  - `type` (string): Tool type
+  - `name` (string): Tool name (for function tools)
+  - `description` (string): Tool description
+  - `parameters` (object): JSON Schema for parameters
+  
+  Supported tool types:
+  - `function`: Custom function calls
+  - `web_search` or `web_search_preview`: Web search capability
+  
+  Unsupported types (will return error):
+  - `file_search`, `code_interpreter`, `computer_use`, `computer_use_preview`, `image_generation`
+</ParamField>
+
+<ParamField body="tool_choice" type="string | object">
+  Controls which tool the model should use.
+  
+  Options:
+  - `"none"`: Model will not call tools
+  - `"auto"`: Model decides whether to call tools
+  - `"required"`: Model must call at least one tool
+  - Object: `{"type": "...", "name": "..."}`
+</ParamField>
+
+<ParamField body="parallel_tool_calls" type="boolean">
+  Whether to enable parallel tool calling.
+</ParamField>
+
+<ParamField body="reasoning" type="object">
+  Reasoning controls for the model.
+  
+  Properties:
+  - `effort` (string): Reasoning effort level (e.g., `"low"`, `"medium"`, `"high"`)
+  - `summary` (string): Reasoning summary mode
+</ParamField>
+
+<ParamField body="text" type="object">
+  Text output controls.
+  
+  Properties:
+  - `verbosity` (string): Output verbosity level
+  - `format` (object): Output format specification
+    - `type` (string): `"text"`, `"json_object"`, or `"json_schema"`
+    - `schema` (object): JSON Schema (for `json_schema` type)
+    - `name` (string): Schema name
+    - `strict` (boolean): Strict schema adherence
+</ParamField>
+
+<ParamField body="stream" type="boolean" default={false}>
+  Whether to stream the response as server-sent events.
+  
+  - `true`: Returns `text/event-stream` with Responses events
+  - `false`: Returns a single response object
+</ParamField>
+
+<ParamField body="include" type="array">
+  Additional data to include in the response.
+  
+  Allowed values:
+  - `"code_interpreter_call.outputs"`
+  - `"computer_call_output.output.image_url"`
+  - `"file_search_call.results"`
+  - `"message.input_image.image_url"`
+  - `"message.output_text.logprobs"`
+  - `"reasoning.encrypted_content"`
+  - `"web_search_call.action.sources"`
+  
+  Unknown values return `400` error.
+</ParamField>
+
+<ParamField body="conversation" type="string">
+  Conversation ID for multi-turn context.
+  
+  **Cannot be used with `previous_response_id`**.
+</ParamField>
+
+<ParamField body="previous_response_id" type="string">
+  **Not supported**. Returns `400` error.
+  
+  Use `conversation` instead for multi-turn context.
+</ParamField>
+
+<ParamField body="store" type="boolean" default={false}>
+  Must be `false` or omitted. Setting to `true` returns `400` error.
+</ParamField>
+
+<ParamField body="truncation" type="string">
+  **Not supported**. Returns `400` error if provided.
+</ParamField>
+
+<ParamField body="prompt_cache_key" type="string">
+  Cache key for prompt caching optimization.
+</ParamField>
+
+## Response (Non-Streaming)
+
+When `stream` is `false` or omitted, returns a response object:
+
+<ResponseField name="id" type="string">
+  Unique identifier for the response.
+</ResponseField>
+
+<ResponseField name="object" type="string">
+  Always `"response"`.
+</ResponseField>
+
+<ResponseField name="status" type="string">
+  Response status:
+  - `"completed"`: Successfully completed
+  - `"incomplete"`: Incomplete (e.g., max tokens reached)
+  - `"failed"`: Failed with error
+</ResponseField>
+
+<ResponseField name="output" type="array">
+  Array of output items generated by the model.
+  
+  Each output item has:
+  - `type` (string): Output type (e.g., `"message"`, `"function_call"`, `"web_search_call"`)
+  - Additional fields based on type
+</ResponseField>
+
+<ResponseField name="usage" type="object">
+  Token usage information.
+  
+  Properties:
+  - `input_tokens` (integer): Tokens in the input
+  - `output_tokens` (integer): Tokens in the output
+  - `total_tokens` (integer): Total tokens used
+  - `input_tokens_details` (object | null):
+    - `cached_tokens` (integer): Cached input tokens
+  - `output_tokens_details` (object | null):
+    - `reasoning_tokens` (integer): Tokens used for reasoning
+</ResponseField>
+
+<ResponseField name="error" type="object">
+  Error information (only present when `status` is `"failed"`).
+  
+  Properties:
+  - `message` (string): Error message
+  - `type` (string): Error type
+  - `code` (string): Error code
+</ResponseField>
+
+## Response (Streaming)
+
+When `stream` is `true`, returns `text/event-stream` with event objects:
+
+### Event Types
+
+<ResponseField name="response.created" type="event">
+  Emitted when response is created.
+  
+  Contains `response` object with `id` and initial metadata.
+</ResponseField>
+
+<ResponseField name="response.in_progress" type="event">
+  Emitted during response generation.
+  
+  May include partial `response` data.
+</ResponseField>
+
+<ResponseField name="response.output_text.delta" type="event">
+  Emitted for text output deltas.
+  
+  Properties:
+  - `delta` (string): Text fragment
+</ResponseField>
+
+<ResponseField name="response.refusal.delta" type="event">
+  Emitted for refusal text deltas.
+  
+  Properties:
+  - `delta` (string): Refusal fragment
+</ResponseField>
+
+<ResponseField name="response.function_call.delta" type="event">
+  Emitted for tool call deltas.
+  
+  Properties:
+  - `call_id` (string): Tool call ID
+  - `name` (string): Tool name
+  - `arguments` (string): Arguments fragment
+</ResponseField>
+
+<ResponseField name="response.completed" type="event">
+  Emitted when response completes successfully.
+  
+  Contains full `response` object with `output` and `usage`.
+</ResponseField>
+
+<ResponseField name="response.incomplete" type="event">
+  Emitted when response is incomplete.
+  
+  Contains `response` with `incomplete_details`:
+  - `reason` (string): Why incomplete (e.g., `"max_output_tokens"`, `"content_filter"`)
+</ResponseField>
+
+<ResponseField name="response.failed" type="event">
+  Emitted when response fails.
+  
+  Contains `response` with `error` object.
+</ResponseField>
+
+<ResponseField name="error" type="event">
+  Emitted for immediate errors.
+  
+  Contains `error` object with error details.
+</ResponseField>
+
+## Examples
+
+### Basic Text Response
+
+```bash
+curl https://api.example.com/v1/responses \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "gpt-4.1",
+    "input": "Explain quantum entanglement in simple terms"
+  }'
+```
+
+### Streaming Response
+
+```bash
+curl https://api.example.com/v1/responses \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "gpt-4.1",
+    "input": "Write a short story about a robot",
+    "stream": true
+  }'
+```
+
+### With Instructions
+
+```bash
+curl https://api.example.com/v1/responses \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "gpt-4.1",
+    "instructions": "You are a helpful coding assistant. Provide concise answers with code examples.",
+    "input": "How do I sort a list in Python?"
+  }'
+```
+
+### Structured Input with Messages
+
+```bash
+curl https://api.example.com/v1/responses \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "gpt-4.1",
+    "messages": [
+      {"role": "system", "content": "You are a math tutor."},
+      {"role": "user", "content": "What is 15 * 23?"}
+    ]
+  }'
+```
+
+### Tool Calling
+
+```bash
+curl https://api.example.com/v1/responses \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "gpt-4.1",
+    "input": "What is the current time in Tokyo?",
+    "tools": [
+      {
+        "type": "function",
+        "name": "get_time",
+        "description": "Get current time for a timezone",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "timezone": {
+              "type": "string",
+              "description": "IANA timezone name"
+            }
+          },
+          "required": ["timezone"]
+        }
+      }
+    ],
+    "tool_choice": "auto"
+  }'
+```
+
+### Web Search
+
+```bash
+curl https://api.example.com/v1/responses \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "gpt-4.1",
+    "input": "What are the latest developments in fusion energy?",
+    "tools": [
+      {"type": "web_search"}
+    ]
+  }'
+```
+
+### Reasoning with Summary
+
+```bash
+curl https://api.example.com/v1/responses \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "gpt-5.2",
+    "input": "Solve this complex math problem: ...",
+    "reasoning": {
+      "effort": "high",
+      "summary": "concise"
+    }
+  }'
+```
+
+### JSON Output Format
+
+```bash
+curl https://api.example.com/v1/responses \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "gpt-4.1",
+    "input": "List 3 programming languages with their use cases",
+    "text": {
+      "format": {
+        "type": "json_schema",
+        "name": "languages",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "languages": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "name": {"type": "string"},
+                  "use_case": {"type": "string"}
+                },
+                "required": ["name", "use_case"]
+              }
+            }
+          }
+        },
+        "strict": true
+      }
+    }
+  }'
+```
+
+### Conversation Context
+
+```bash
+curl https://api.example.com/v1/responses \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "gpt-4.1",
+    "input": "Tell me more about that",
+    "conversation": "conv_abc123"
+  }'
+```
+
+## Input Sanitization
+
+The service automatically sanitizes input before forwarding to upstream:
+
+### Interleaved Reasoning Removal
+Unsupported interleaved reasoning fields are stripped from input:
+- `reasoning_content`
+- `reasoning_details`
+- `tool_calls` (in input context)
+- `function_call` (in input context)
+
+Top-level `reasoning` controls are preserved.
+
+### Content Type Normalization
+- Assistant text content is rewritten to use `output_text` type
+- Tool messages are converted to `function_call_output` format with `call_id`
+
+### Unsupported Field Removal
+Before upstream forwarding, these fields are stripped:
+- `safety_identifier`
+- `prompt_cache_retention`
+- `temperature`
+- `max_output_tokens`
+
+## Error Handling
+
+All errors return OpenAI-compatible error envelopes:
+
+```json
+{
+  "error": {
+    "message": "Error description",
+    "type": "invalid_request_error",
+    "code": "error_code",
+    "param": "field_name"
+  }
+}
+```
+
+Common error codes:
+- `invalid_request_error`: Invalid request parameters
+- `model_not_allowed`: API key lacks access to requested model
+- `no_accounts`: No upstream accounts available (503 status)
+- `upstream_error`: Upstream service error (502 status)
+- `not_implemented`: Feature not implemented (501 status)
+
+For streaming requests, errors are emitted as `response.failed` or `error` events.
+
+## Validation Rules
+
+### Input Validation
+- Either `input` or `messages` required (not both)
+- `input` must be string or array
+- `input_file.file_id` is rejected
+
+### Tool Validation
+- `web_search_preview` normalized to `web_search`
+- Unsupported tool types rejected: `file_search`, `code_interpreter`, `computer_use`, `image_generation`
+
+### Conversation Validation
+- Cannot provide both `conversation` and `previous_response_id`
+- `previous_response_id` is not supported
+
+### Store Validation
+- `store` must be `false` or omitted
+- Setting to `true` returns error
+
+### Include Validation
+- Only allowlisted include values accepted
+- Unknown values return error
+
+### Truncation Validation
+- `truncation` is not supported
+- Any value returns error
+
+## Model Restrictions
+
+If your API key has `allowed_models` configured, only those models can be used. Requests for other models return:
+
+```json
+{
+  "error": {
+    "message": "This API key does not have access to model 'gpt-5.2'",
+    "type": "invalid_request_error",
+    "code": "model_not_allowed"
+  }
+}
+```
+
+Check available models at `/v1/models`.

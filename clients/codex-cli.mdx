@@ -1,0 +1,252 @@
+---
+title: Codex CLI Setup
+description: Configure Codex CLI and IDE extensions to use Codex-LB
+---
+
+Codex CLI is a powerful terminal-based AI coding assistant. Configure it to use Codex-LB for account pooling and usage tracking.
+
+## Endpoint
+
+```
+http://127.0.0.1:2455/backend-api/codex
+```
+
+<Note>
+  Codex CLI uses the `/backend-api/codex` endpoint, not `/v1`. This endpoint supports the Codex wire API format with `/responses/compact` support.
+</Note>
+
+## Configuration
+
+Edit your Codex CLI config file at `~/.codex/config.toml`:
+
+<Tabs>
+  <Tab title="Without API Key Auth">
+    Use this configuration when API key authentication is **disabled** (default):
+    
+    ```toml ~/.codex/config.toml
+    model = "gpt-5.3-codex"
+    model_reasoning_effort = "xhigh"
+    model_provider = "codex-lb"
+    
+    [model_providers.codex-lb]
+    name = "OpenAI"  # required — enables remote /responses/compact
+    base_url = "http://127.0.0.1:2455/backend-api/codex"
+    wire_api = "responses"
+    ```
+    
+    <Info>
+      The `name = "OpenAI"` field is required for proper wire API detection.
+    </Info>
+  </Tab>
+  
+  <Tab title="With API Key Auth">
+    Use this configuration when API key authentication is **enabled**:
+    
+    ```toml ~/.codex/config.toml
+    model = "gpt-5.3-codex"
+    model_reasoning_effort = "xhigh"
+    model_provider = "codex-lb"
+    
+    [model_providers.codex-lb]
+    name = "OpenAI"
+    base_url = "http://127.0.0.1:2455/backend-api/codex"
+    wire_api = "responses"
+    env_key = "CODEX_LB_API_KEY"
+    ```
+    
+    Set the environment variable with your API key:
+    
+    ```bash
+    export CODEX_LB_API_KEY="sk-clb-..."   # key from dashboard
+    codex
+    ```
+    
+    <Tip>
+      Add the `export` command to your shell profile (`~/.bashrc`, `~/.zshrc`) to make it persistent.
+    </Tip>
+  </Tab>
+</Tabs>
+
+## Configuration Fields
+
+| Field | Description | Required |
+|-------|-------------|----------|
+| `model` | Model ID to use (e.g., `gpt-5.3-codex`) | Yes |
+| `model_reasoning_effort` | Reasoning effort level: `low`, `medium`, `high`, `xhigh` | No |
+| `model_provider` | Provider identifier (use `codex-lb`) | Yes |
+| `name` | Must be `"OpenAI"` for wire API compatibility | Yes |
+| `base_url` | Codex-LB backend API endpoint | Yes |
+| `wire_api` | Must be `"responses"` for Codex wire format | Yes |
+| `env_key` | Environment variable name for API key | Only if auth enabled |
+
+## Migrating from Direct OpenAI
+
+If you were previously using OpenAI directly, old sessions won't appear in `codex resume` because they're tagged with a different `model_provider`.
+
+Re-tag your existing sessions to make them appear:
+
+<CodeGroup>
+```bash JSONL Session Files (All Versions)
+# Update all JSONL session files
+find ~/.codex/sessions -name '*.jsonl' \
+  -exec sed -i '' 's/"model_provider":"openai"/"model_provider":"codex-lb"/g' {} +
+```
+
+```bash SQLite Database (v0.105.0+)
+# Update SQLite state database (for Codex CLI >= v0.105.0)
+sqlite3 ~/.codex/state_5.sqlite \
+  "UPDATE threads SET model_provider = 'codex-lb' WHERE model_provider = 'openai';"
+```
+</CodeGroup>
+
+<Warning>
+  Make a backup before modifying session files:
+  
+  ```bash
+  cp -r ~/.codex/sessions ~/.codex/sessions.backup
+  cp ~/.codex/state_5.sqlite ~/.codex/state_5.sqlite.backup
+  ```
+</Warning>
+
+## Verify Configuration
+
+Test your setup:
+
+```bash
+# Start a new session
+codex
+
+# At the prompt, try a simple query
+> Hello, can you help me?
+```
+
+If configured correctly, you should see:
+- Connection to Codex-LB successful
+- Model responses from your pooled accounts
+- Usage tracked in the Codex-LB dashboard
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Error: Connection refused">
+    Ensure Codex-LB is running:
+    
+    ```bash
+    curl http://127.0.0.1:2455/backend-api/codex/v1/models
+    ```
+    
+    If using Docker:
+    ```bash
+    docker ps | grep codex-lb
+    docker logs codex-lb
+    ```
+  </Accordion>
+  
+  <Accordion title="Error: 401 Unauthorized">
+    This means API key auth is enabled but your key is missing or invalid:
+    
+    1. Verify `CODEX_LB_API_KEY` is set:
+       ```bash
+       echo $CODEX_LB_API_KEY
+       ```
+    
+    2. Check the key is valid in the dashboard
+    3. Ensure `env_key` is configured in `config.toml`
+  </Accordion>
+  
+  <Accordion title="Error: Model not found">
+    The requested model isn't available:
+    
+    1. Check available models:
+       ```bash
+       curl http://127.0.0.1:2455/backend-api/codex/v1/models
+       ```
+    
+    2. Verify at least one account supports the model
+    3. Update your `model` field in `config.toml` to an available model
+  </Accordion>
+  
+  <Accordion title="Sessions don't appear in codex resume">
+    This happens when `model_provider` doesn't match. See [Migrating from Direct OpenAI](#migrating-from-direct-openai) above.
+  </Accordion>
+  
+  <Accordion title="Wire API errors">
+    If you see wire format errors:
+    
+    1. Ensure `name = "OpenAI"` is set (enables wire API detection)
+    2. Verify `wire_api = "responses"` is configured
+    3. Check Codex CLI version supports the wire API format
+  </Accordion>
+</AccordionGroup>
+
+## IDE Extensions
+
+Codex IDE extensions (VS Code, JetBrains, etc.) typically read from the same `~/.codex/config.toml` file. The configuration above should work for both CLI and IDE usage.
+
+If your IDE extension uses a separate config:
+
+1. Locate the extension's config file (check extension settings)
+2. Apply the same `model_provider` configuration
+3. Restart your IDE
+
+## Advanced Configuration
+
+### Multiple Providers
+
+You can configure multiple providers and switch between them:
+
+```toml
+model_provider = "codex-lb"  # default provider
+
+[model_providers.codex-lb]
+name = "OpenAI"
+base_url = "http://127.0.0.1:2455/backend-api/codex"
+wire_api = "responses"
+
+[model_providers.openai-direct]
+name = "OpenAI"
+base_url = "https://api.openai.com"
+env_key = "OPENAI_API_KEY"
+```
+
+Switch providers with:
+```bash
+codex --provider openai-direct
+```
+
+### Remote Access
+
+If Codex-LB is running on a different machine:
+
+```toml
+[model_providers.codex-lb]
+name = "OpenAI"
+base_url = "http://your-server:2455/backend-api/codex"
+wire_api = "responses"
+env_key = "CODEX_LB_API_KEY"
+```
+
+<Warning>
+  When exposing Codex-LB remotely:
+  - **Always** enable API key authentication
+  - Use HTTPS with a reverse proxy (nginx, Caddy)
+  - Configure firewall rules to restrict access
+  - See [Production Deployment](/deployment/production)
+</Warning>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="API Keys" icon="key" href="/guides/managing-api-keys">
+    Create and manage API keys for authentication
+  </Card>
+  <Card title="Rate Limiting" icon="gauge" href="/guides/rate-limiting">
+    Configure rate limits per key or account
+  </Card>
+  <Card title="Codex API" icon="code" href="/api/codex-responses">
+    Explore the Codex backend API endpoints
+  </Card>
+  <Card title="Dashboard" icon="chart-line" href="/features/usage-tracking">
+    Monitor usage and costs in real-time
+  </Card>
+</CardGroup>

@@ -1,0 +1,771 @@
+---
+title: Production Deployment
+description: Deploy Codex-LB to production with reverse proxy, SSL, and best practices
+---
+
+## Overview
+
+This guide covers production deployment best practices for Codex-LB, including:
+
+- Reverse proxy setup (Nginx, Caddy, Traefik)
+- SSL/TLS termination
+- Database selection and tuning
+- Security hardening
+- Monitoring and logging
+- Backup strategies
+
+## Architecture
+
+A typical production setup:
+
+```
+Internet → Reverse Proxy (SSL termination) → Codex-LB → Database
+                ↓
+             Port 443 (HTTPS) → Port 2455 (HTTP)
+             Port 443 (HTTPS) → Port 1455 (HTTP) for OAuth
+```
+
+## Prerequisites
+
+- Linux server (Ubuntu 22.04+ recommended)
+- Docker and Docker Compose installed
+- Domain name with DNS configured
+- SSL certificate (Let's Encrypt recommended)
+
+## Database Selection
+
+### SQLite (Default)
+
+**When to use:**
+- Single-instance deployments
+- Low to medium concurrency (< 100 req/s)
+- Simple setup requirements
+
+**Pros:**
+- Zero configuration
+- No separate database server
+- Built-in automatic backups before migrations
+
+**Cons:**
+- Not suitable for multi-instance deployments
+- Limited concurrent write performance
+
+**Configuration:**
+
+```bash
+CODEX_LB_DATABASE_URL=sqlite+aiosqlite:////var/lib/codex-lb/store.db
+CODEX_LB_DATABASE_SQLITE_PRE_MIGRATE_BACKUP_ENABLED=true
+CODEX_LB_DATABASE_SQLITE_PRE_MIGRATE_BACKUP_MAX_FILES=10
+```
+
+### PostgreSQL (Recommended for Production)
+
+**When to use:**
+- High concurrency requirements
+- Multi-instance deployments (horizontal scaling)
+- Managed database infrastructure
+
+**Pros:**
+- Better concurrent write performance
+- Native replication and backup tools
+- Suitable for load balancing across multiple instances
+
+**Cons:**
+- Requires separate database service
+- More complex setup
+
+**Configuration:**
+
+```bash
+CODEX_LB_DATABASE_URL=postgresql+asyncpg://codex_lb:STRONG_PASSWORD@db-host:5432/codex_lb
+
+# Connection pool settings
+CODEX_LB_DATABASE_POOL_SIZE=20
+CODEX_LB_DATABASE_MAX_OVERFLOW=10
+CODEX_LB_DATABASE_POOL_TIMEOUT_SECONDS=30
+```
+
+## Reverse Proxy Setup
+
+### Nginx
+
+Create `/etc/nginx/sites-available/codex-lb`:
+
+```nginx
+# Upstream definitions
+upstream codex_lb_backend {
+    server 127.0.0.1:2455;
+    keepalive 32;
+}
+
+upstream codex_lb_oauth {
+    server 127.0.0.1:1455;
+    keepalive 8;
+}
+
+# Main dashboard and API
+server {
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
+    server_name codex-lb.example.com;
+
+    # SSL configuration
+    ssl_certificate /etc/letsencrypt/live/codex-lb.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/codex-lb.example.com/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers HIGH:!aNULL:!MD5;
+    ssl_prefer_server_ciphers on;
+    ssl_session_cache shared:SSL:10m;
+    ssl_session_timeout 10m;
+
+    # Security headers
+    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+    add_header X-Frame-Options "SAMEORIGIN" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-XSS-Protection "1; mode=block" always;
+
+    # Logging
+    access_log /var/log/nginx/codex-lb-access.log;
+    error_log /var/log/nginx/codex-lb-error.log;
+
+    # Client body size (for file uploads if any)
+    client_max_body_size 20M;
+
+    # Proxy settings
+    location / {
+        proxy_pass http://codex_lb_backend;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Connection "";
+        
+        # WebSocket support (for SSE)
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        
+        # Timeouts
+        proxy_connect_timeout 60s;
+        proxy_send_timeout 300s;
+        proxy_read_timeout 300s;
+        
+        # Buffering (disable for SSE)
+        proxy_buffering off;
+        proxy_cache off;
+    }
+}
+
+# OAuth callback endpoint (port 1455)
+server {
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
+    server_name oauth.codex-lb.example.com;
+
+    # SSL configuration (same as above)
+    ssl_certificate /etc/letsencrypt/live/codex-lb.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/codex-lb.example.com/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers HIGH:!aNULL:!MD5;
+    ssl_prefer_server_ciphers on;
+
+    location / {
+        proxy_pass http://codex_lb_oauth;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+
+# HTTP to HTTPS redirect
+server {
+    listen 80;
+    listen [::]:80;
+    server_name codex-lb.example.com oauth.codex-lb.example.com;
+    return 301 https://$server_name$request_uri;
+}
+```
+
+Enable and reload:
+
+```bash
+sudo ln -s /etc/nginx/sites-available/codex-lb /etc/nginx/sites-enabled/
+sudo nginx -t
+sudo systemctl reload nginx
+```
+
+<Warning>
+**OAuth Redirect Configuration**: Update your environment variables to use the public OAuth domain:
+
+```bash
+CODEX_LB_OAUTH_REDIRECT_URI=https://oauth.codex-lb.example.com/auth/callback
+```
+</Warning>
+
+### Caddy
+
+Create `Caddyfile`:
+
+```caddy
+# Main dashboard and API
+codex-lb.example.com {
+    reverse_proxy localhost:2455 {
+        # Enable streaming for SSE
+        flush_interval -1
+    }
+    
+    # Security headers
+    header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains"
+        X-Frame-Options "SAMEORIGIN"
+        X-Content-Type-Options "nosniff"
+        X-XSS-Protection "1; mode=block"
+    }
+    
+    # Logging
+    log {
+        output file /var/log/caddy/codex-lb-access.log
+    }
+}
+
+# OAuth callback
+oauth.codex-lb.example.com {
+    reverse_proxy localhost:1455
+}
+```
+
+Start Caddy:
+
+```bash
+caddy run --config Caddyfile
+```
+
+<Info>
+Caddy automatically obtains and renews SSL certificates from Let's Encrypt.
+</Info>
+
+### Traefik
+
+Create `docker-compose.yml` with Traefik:
+
+```yaml
+services:
+  traefik:
+    image: traefik:v3.0
+    command:
+      - "--api.dashboard=true"
+      - "--providers.docker=true"
+      - "--entrypoints.web.address=:80"
+      - "--entrypoints.websecure.address=:443"
+      - "--certificatesresolvers.letsencrypt.acme.email=admin@example.com"
+      - "--certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json"
+      - "--certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web"
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - traefik-letsencrypt:/letsencrypt
+    restart: unless-stopped
+
+  codex-lb:
+    image: ghcr.io/soju06/codex-lb:latest
+    volumes:
+      - codex-lb-data:/var/lib/codex-lb
+    environment:
+      CODEX_LB_DATABASE_URL: postgresql+asyncpg://codex_lb:password@postgres:5432/codex_lb
+      CODEX_LB_OAUTH_REDIRECT_URI: https://oauth.codex-lb.example.com/auth/callback
+      CODEX_LB_FIREWALL_TRUST_PROXY_HEADERS: "true"
+    labels:
+      # Main service
+      - "traefik.enable=true"
+      - "traefik.http.routers.codex-lb.rule=Host(`codex-lb.example.com`)"
+      - "traefik.http.routers.codex-lb.entrypoints=websecure"
+      - "traefik.http.routers.codex-lb.tls.certresolver=letsencrypt"
+      - "traefik.http.services.codex-lb.loadbalancer.server.port=2455"
+      # OAuth callback
+      - "traefik.http.routers.codex-lb-oauth.rule=Host(`oauth.codex-lb.example.com`)"
+      - "traefik.http.routers.codex-lb-oauth.entrypoints=websecure"
+      - "traefik.http.routers.codex-lb-oauth.tls.certresolver=letsencrypt"
+      - "traefik.http.services.codex-lb-oauth.loadbalancer.server.port=1455"
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: codex_lb
+      POSTGRES_PASSWORD: STRONG_PASSWORD
+      POSTGRES_DB: codex_lb
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    restart: unless-stopped
+
+volumes:
+  traefik-letsencrypt:
+  codex-lb-data:
+  postgres-data:
+```
+
+## Security Hardening
+
+### Environment Variables
+
+Never commit secrets to version control. Use environment files with restricted permissions:
+
+```bash
+# Create .env.production
+touch .env.production
+chmod 600 .env.production
+```
+
+**Critical settings:**
+
+```bash
+# Database with strong password
+CODEX_LB_DATABASE_URL=postgresql+asyncpg://codex_lb:STRONG_RANDOM_PASSWORD@postgres:5432/codex_lb
+
+# Encryption key file
+CODEX_LB_ENCRYPTION_KEY_FILE=/var/lib/codex-lb/encryption.key
+
+# Firewall settings
+CODEX_LB_FIREWALL_TRUST_PROXY_HEADERS=true
+CODEX_LB_FIREWALL_TRUSTED_PROXY_CIDRS=172.18.0.0/16
+```
+
+### Dashboard Authentication
+
+Configure strong authentication in the dashboard:
+
+1. Navigate to **Settings → Security**
+2. Set a strong password (16+ characters)
+3. Enable TOTP (Time-based One-Time Password) 2FA
+4. Save recovery codes securely
+
+### API Key Authentication
+
+Enable API key authentication to restrict proxy access:
+
+1. Navigate to **Settings → API Key Auth**
+2. Toggle **Enable API Key Authentication**
+3. Create API keys in **API Keys** section
+4. Set rate limits and model restrictions per key
+
+### Firewall Rules
+
+**IP Allowlist/Blocklist:**
+
+Use the built-in firewall to restrict access by IP:
+
+1. Navigate to **Settings → Firewall**
+2. Add allowed IP ranges (CIDR notation)
+3. Block malicious IPs as needed
+
+**When behind a reverse proxy:**
+
+```bash
+# Trust X-Forwarded-For headers
+CODEX_LB_FIREWALL_TRUST_PROXY_HEADERS=true
+
+# Specify trusted proxy IP ranges
+CODEX_LB_FIREWALL_TRUSTED_PROXY_CIDRS=172.18.0.0/16,10.0.0.0/8
+```
+
+<Warning>
+Only enable `CODEX_LB_FIREWALL_TRUST_PROXY_HEADERS` if your reverse proxy is properly configured to set `X-Forwarded-For`. Otherwise, clients can spoof IP addresses.
+</Warning>
+
+### Container Security
+
+The Docker image runs as a non-root user:
+
+```dockerfile
+# From Dockerfile
+RUN adduser --disabled-password --gecos "" app \
+    && mkdir -p /var/lib/codex-lb \
+    && chown -R app:app /var/lib/codex-lb
+
+USER app
+```
+
+Ensure volume permissions match:
+
+```bash
+sudo chown -R 1000:1000 /path/to/codex-lb-data
+```
+
+## Database Configuration
+
+### PostgreSQL Setup
+
+**Create database and user:**
+
+```sql
+CREATE DATABASE codex_lb;
+CREATE USER codex_lb WITH ENCRYPTED PASSWORD 'STRONG_PASSWORD';
+GRANT ALL PRIVILEGES ON DATABASE codex_lb TO codex_lb;
+
+-- PostgreSQL 15+: Grant schema privileges
+\c codex_lb
+GRANT ALL ON SCHEMA public TO codex_lb;
+```
+
+**Connection pooling:**
+
+```bash
+CODEX_LB_DATABASE_POOL_SIZE=20
+CODEX_LB_DATABASE_MAX_OVERFLOW=10
+CODEX_LB_DATABASE_POOL_TIMEOUT_SECONDS=30
+```
+
+**Tuning:**
+
+For PostgreSQL, optimize based on workload:
+
+```ini
+# postgresql.conf
+max_connections = 200
+shared_buffers = 256MB
+effective_cache_size = 1GB
+work_mem = 10MB
+maintenance_work_mem = 64MB
+wal_buffers = 16MB
+checkpoint_completion_target = 0.9
+```
+
+### SQLite Tuning
+
+For SQLite production deployments:
+
+```bash
+# Enable WAL mode for better concurrency
+# (automatically enabled by codex-lb)
+
+# Pre-migration backups
+CODEX_LB_DATABASE_SQLITE_PRE_MIGRATE_BACKUP_ENABLED=true
+CODEX_LB_DATABASE_SQLITE_PRE_MIGRATE_BACKUP_MAX_FILES=10
+```
+
+## Backup Strategies
+
+### Automated Backups
+
+#### SQLite
+
+**Using cron:**
+
+```bash
+#!/bin/bash
+# /usr/local/bin/backup-codex-lb.sh
+
+BACKUP_DIR="/backups/codex-lb"
+DATE=$(date +%Y%m%d-%H%M%S)
+VOLUME_NAME="codex-lb-data"
+
+mkdir -p "$BACKUP_DIR"
+
+docker run --rm \
+  -v "${VOLUME_NAME}:/data:ro" \
+  -v "${BACKUP_DIR}:/backup" \
+  alpine tar czf "/backup/codex-lb-${DATE}.tar.gz" -C /data .
+
+# Keep only last 30 days
+find "$BACKUP_DIR" -name "codex-lb-*.tar.gz" -mtime +30 -delete
+
+echo "Backup completed: codex-lb-${DATE}.tar.gz"
+```
+
+**Add to crontab:**
+
+```bash
+# Run daily at 2 AM
+0 2 * * * /usr/local/bin/backup-codex-lb.sh >> /var/log/codex-lb-backup.log 2>&1
+```
+
+#### PostgreSQL
+
+**Using pg_dump:**
+
+```bash
+#!/bin/bash
+# /usr/local/bin/backup-codex-lb-db.sh
+
+BACKUP_DIR="/backups/codex-lb-db"
+DATE=$(date +%Y%m%d-%H%M%S)
+
+mkdir -p "$BACKUP_DIR"
+
+docker compose exec -T postgres pg_dump -U codex_lb codex_lb | \
+  gzip > "${BACKUP_DIR}/codex-lb-db-${DATE}.sql.gz"
+
+# Keep only last 30 days
+find "$BACKUP_DIR" -name "codex-lb-db-*.sql.gz" -mtime +30 -delete
+
+echo "Database backup completed: codex-lb-db-${DATE}.sql.gz"
+```
+
+**Continuous archiving:**
+
+For point-in-time recovery, enable PostgreSQL WAL archiving:
+
+```ini
+# postgresql.conf
+wal_level = replica
+archive_mode = on
+archive_command = 'test ! -f /mnt/wal_archive/%f && cp %p /mnt/wal_archive/%f'
+```
+
+### Disaster Recovery
+
+**Test restores regularly:**
+
+```bash
+# Monthly restore test
+#!/bin/bash
+
+LATEST_BACKUP=$(ls -t /backups/codex-lb-db/codex-lb-db-*.sql.gz | head -1)
+
+# Restore to test database
+docker compose exec -T postgres psql -U codex_lb -c "CREATE DATABASE codex_lb_test;"
+zcat "$LATEST_BACKUP" | docker compose exec -T postgres psql -U codex_lb codex_lb_test
+
+echo "Restore test completed successfully"
+```
+
+## Monitoring and Logging
+
+### Health Checks
+
+**Monitoring endpoint:**
+
+```bash
+curl -f https://codex-lb.example.com/health || exit 1
+```
+
+**Uptime monitoring:**
+
+Use services like:
+- [UptimeRobot](https://uptimerobot.com)
+- [Pingdom](https://www.pingdom.com)
+- [Better Uptime](https://betteruptime.com)
+
+Configure alerts for:
+- `/health` endpoint returning non-200
+- Response time > 5 seconds
+- Certificate expiration
+
+### Application Logs
+
+**View logs:**
+
+```bash
+# Follow logs
+docker compose logs -f codex-lb
+
+# Last 100 lines
+docker compose logs --tail 100 codex-lb
+
+# Filter by severity
+docker compose logs codex-lb | grep ERROR
+```
+
+**Centralized logging:**
+
+Integrate with logging systems:
+
+**Using Loki:**
+
+```yaml
+services:
+  codex-lb:
+    image: ghcr.io/soju06/codex-lb:latest
+    logging:
+      driver: loki
+      options:
+        loki-url: "http://loki:3100/loki/api/v1/push"
+        loki-batch-size: "400"
+```
+
+**Using syslog:**
+
+```yaml
+services:
+  codex-lb:
+    image: ghcr.io/soju06/codex-lb:latest
+    logging:
+      driver: syslog
+      options:
+        syslog-address: "tcp://syslog-server:514"
+        tag: "codex-lb"
+```
+
+### Metrics
+
+**Prometheus monitoring (future):**
+
+Codex-LB doesn't expose Prometheus metrics yet, but you can monitor:
+
+- Container metrics (CPU, memory, network)
+- PostgreSQL metrics (using postgres_exporter)
+- Nginx/Caddy metrics
+
+## Performance Optimization
+
+### Connection Pooling
+
+**PostgreSQL:**
+
+```bash
+CODEX_LB_DATABASE_POOL_SIZE=20          # Base connections
+CODEX_LB_DATABASE_MAX_OVERFLOW=10      # Extra connections under load
+CODEX_LB_DATABASE_POOL_TIMEOUT_SECONDS=30
+```
+
+### Caching
+
+Codex-LB caches:
+- **Settings**: Invalidated on change
+- **Rate limit headers**: Short TTL for API responses
+- **Model list**: Refreshed periodically from upstream
+
+### Horizontal Scaling
+
+With PostgreSQL, you can run multiple Codex-LB instances behind a load balancer:
+
+```yaml
+services:
+  codex-lb-1:
+    image: ghcr.io/soju06/codex-lb:latest
+    environment:
+      CODEX_LB_DATABASE_URL: postgresql+asyncpg://codex_lb:password@postgres:5432/codex_lb
+    # ...
+
+  codex-lb-2:
+    image: ghcr.io/soju06/codex-lb:latest
+    environment:
+      CODEX_LB_DATABASE_URL: postgresql+asyncpg://codex_lb:password@postgres:5432/codex_lb
+    # ...
+
+  nginx:
+    image: nginx:alpine
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+    ports:
+      - "80:80"
+    depends_on:
+      - codex-lb-1
+      - codex-lb-2
+```
+
+**Load balancer config:**
+
+```nginx
+upstream codex_lb_cluster {
+    least_conn;  # Route to least busy instance
+    server codex-lb-1:2455 max_fails=3 fail_timeout=30s;
+    server codex-lb-2:2455 max_fails=3 fail_timeout=30s;
+}
+```
+
+## Troubleshooting
+
+### High Memory Usage
+
+**Check container stats:**
+
+```bash
+docker stats codex-lb
+```
+
+**Limit memory:**
+
+```yaml
+services:
+  codex-lb:
+    image: ghcr.io/soju06/codex-lb:latest
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+        reservations:
+          memory: 512M
+```
+
+### Slow Database Queries
+
+**Enable query logging:**
+
+```bash
+CODEX_LB_DATABASE_ECHO=true
+```
+
+**PostgreSQL slow query log:**
+
+```ini
+# postgresql.conf
+log_min_duration_statement = 1000  # Log queries > 1s
+```
+
+### SSL Certificate Issues
+
+**Check certificate expiration:**
+
+```bash
+echo | openssl s_client -connect codex-lb.example.com:443 2>/dev/null | \
+  openssl x509 -noout -dates
+```
+
+**Renew Let's Encrypt:**
+
+```bash
+# Certbot
+sudo certbot renew
+sudo systemctl reload nginx
+
+# Caddy (automatic)
+# No action needed, Caddy auto-renews
+```
+
+## Maintenance
+
+### Updating Codex-LB
+
+```bash
+# Pull latest image
+docker compose pull codex-lb
+
+# Backup before updating
+/usr/local/bin/backup-codex-lb.sh
+
+# Restart with new image
+docker compose up -d codex-lb
+
+# Check logs
+docker compose logs -f codex-lb
+```
+
+### Database Maintenance
+
+**PostgreSQL VACUUM:**
+
+```bash
+# Regular vacuum (automated by autovacuum usually)
+docker compose exec postgres psql -U codex_lb -d codex_lb -c "VACUUM ANALYZE;"
+
+# Full vacuum (requires exclusive lock, schedule during maintenance window)
+docker compose exec postgres psql -U codex_lb -d codex_lb -c "VACUUM FULL ANALYZE;"
+```
+
+**SQLite integrity check:**
+
+```bash
+docker exec codex-lb sqlite3 /var/lib/codex-lb/store.db "PRAGMA integrity_check;"
+```
+
+## Next Steps
+
+- [Configuration Reference](/configuration/environment-variables) - All environment variables
+- [API Documentation](/api-reference/introduction) - API endpoints and usage
+- [Client Setup](/guides/client-setup) - Connect AI clients
+- [Monitoring Guide](/guides/monitoring) - Advanced monitoring setup

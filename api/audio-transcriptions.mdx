@@ -1,0 +1,377 @@
+---
+title: 'Audio Transcriptions'
+api: 'POST /v1/audio/transcriptions'
+description: 'Transcribe audio to text using OpenAI-compatible format'
+---
+
+## Overview
+
+The `/v1/audio/transcriptions` endpoint provides OpenAI-compatible audio transcription. It accepts multipart audio file uploads and returns transcribed text.
+
+This endpoint:
+- Accepts various audio formats (WAV, MP3, M4A, etc.)
+- Enforces strict model compatibility (`gpt-4o-transcribe` only)
+- Supports optional transcription prompts for context
+- Applies API key authentication and rate limiting
+
+## Authentication
+
+<ParamField header="Authorization" type="string" required>
+  Bearer token for API authentication. Format: `Bearer YOUR_API_KEY`
+</ParamField>
+
+## Request
+
+This endpoint requires `multipart/form-data` encoding.
+
+<ParamField body="file" type="file" required>
+  The audio file to transcribe.
+  
+  **Supported formats:**
+  - WAV
+  - MP3
+  - M4A
+  - FLAC
+  - OGG
+  - WebM
+  
+  **Size limit:** Check with your deployment for specific limits.
+</ParamField>
+
+<ParamField body="model" type="string" required>
+  Model to use for transcription. **Must be exactly `"gpt-4o-transcribe"`**.
+  
+  Any other value will return a `400` error with:
+  ```json
+  {
+    "error": {
+      "message": "Unsupported transcription model 'model-name'. Only 'gpt-4o-transcribe' is supported.",
+      "type": "invalid_request_error",
+      "code": "invalid_request_error",
+      "param": "model"
+    }
+  }
+  ```
+</ParamField>
+
+<ParamField body="prompt" type="string">
+  Optional text to guide the transcription style or context.
+  
+  Use this to:
+  - Provide context about the audio content
+  - Specify spelling of uncommon words or names
+  - Guide transcription style
+  
+  The prompt is forwarded to the upstream transcription service without modification.
+</ParamField>
+
+## Response
+
+Returns a JSON object with the transcribed text.
+
+<ResponseField name="text" type="string">
+  The transcribed text from the audio file.
+</ResponseField>
+
+Additional fields may be present depending on upstream response format.
+
+## Examples
+
+### Basic Transcription
+
+```bash
+curl https://api.example.com/v1/audio/transcriptions \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -F "file=@/path/to/audio.mp3" \
+  -F "model=gpt-4o-transcribe"
+```
+
+### Response Example
+
+```json
+{
+  "text": "Hello, this is a test transcription of an audio file."
+}
+```
+
+### With Transcription Prompt
+
+```bash
+curl https://api.example.com/v1/audio/transcriptions \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -F "file=@/path/to/meeting.wav" \
+  -F "model=gpt-4o-transcribe" \
+  -F "prompt=This is a technical meeting discussing API design. Speakers include Alice, Bob, and Charlie."
+```
+
+### Different Audio Formats
+
+**WAV file:**
+```bash
+curl https://api.example.com/v1/audio/transcriptions \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -F "file=@recording.wav" \
+  -F "model=gpt-4o-transcribe"
+```
+
+**M4A file:**
+```bash
+curl https://api.example.com/v1/audio/transcriptions \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -F "file=@voice-memo.m4a" \
+  -F "model=gpt-4o-transcribe"
+```
+
+**FLAC file:**
+```bash
+curl https://api.example.com/v1/audio/transcriptions \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -F "file=@podcast.flac" \
+  -F "model=gpt-4o-transcribe"
+```
+
+### Using JavaScript
+
+```javascript
+const formData = new FormData();
+formData.append('file', audioFile); // File object from input
+formData.append('model', 'gpt-4o-transcribe');
+formData.append('prompt', 'Optional context for transcription');
+
+const response = await fetch('https://api.example.com/v1/audio/transcriptions', {
+  method: 'POST',
+  headers: {
+    'Authorization': 'Bearer YOUR_API_KEY'
+  },
+  body: formData
+});
+
+const result = await response.json();
+console.log('Transcription:', result.text);
+```
+
+### Using Python
+
+```python
+import requests
+
+url = 'https://api.example.com/v1/audio/transcriptions'
+headers = {'Authorization': 'Bearer YOUR_API_KEY'}
+
+with open('audio.mp3', 'rb') as audio_file:
+    files = {'file': audio_file}
+    data = {
+        'model': 'gpt-4o-transcribe',
+        'prompt': 'Optional transcription context'
+    }
+    response = requests.post(url, headers=headers, files=files, data=data)
+
+result = response.json()
+print('Transcription:', result['text'])
+```
+
+## Error Handling
+
+All errors return OpenAI-compatible error envelopes:
+
+```json
+{
+  "error": {
+    "message": "Error description",
+    "type": "error_type",
+    "code": "error_code",
+    "param": "field_name"
+  }
+}
+```
+
+### Common Errors
+
+**Invalid Model:**
+```json
+{
+  "error": {
+    "message": "Unsupported transcription model 'whisper-1'. Only 'gpt-4o-transcribe' is supported.",
+    "type": "invalid_request_error",
+    "code": "invalid_request_error",
+    "param": "model"
+  }
+}
+```
+HTTP Status: `400 Bad Request`
+
+**Missing File:**
+```json
+{
+  "error": {
+    "message": "Missing required parameter: file",
+    "type": "invalid_request_error",
+    "code": "invalid_request_error"
+  }
+}
+```
+HTTP Status: `400 Bad Request`
+
+**Model Access Denied:**
+```json
+{
+  "error": {
+    "message": "This API key does not have access to model 'gpt-4o-transcribe'",
+    "type": "invalid_request_error",
+    "code": "model_not_allowed"
+  }
+}
+```
+HTTP Status: `403 Forbidden`
+
+**Rate Limit Exceeded:**
+```json
+{
+  "error": {
+    "message": "Rate limit exceeded. Usage resets at 2026-03-03T15:30:00Z.",
+    "type": "rate_limit_error",
+    "code": "rate_limit_exceeded"
+  }
+}
+```
+HTTP Status: `429 Too Many Requests`
+
+**Upstream Error:**
+```json
+{
+  "error": {
+    "message": "Upstream transcription service error",
+    "type": "server_error",
+    "code": "upstream_error"
+  }
+}
+```
+HTTP Status: `502 Bad Gateway`
+
+**No Accounts Available:**
+```json
+{
+  "error": {
+    "message": "No upstream accounts available",
+    "type": "server_error",
+    "code": "no_accounts"
+  }
+}
+```
+HTTP Status: `503 Service Unavailable`
+
+## Model Restrictions
+
+### Fixed Model Requirement
+
+Unlike Chat Completions and Responses endpoints, transcription only supports a single fixed model: `gpt-4o-transcribe`.
+
+This is enforced for OpenAI API compatibility. If you need to use a different transcription model, contact your administrator.
+
+### API Key Restrictions
+
+If your API key has `allowed_models` configured, it must include `gpt-4o-transcribe` to use this endpoint.
+
+**API Key Configuration:**
+```json
+{
+  "allowed_models": ["gpt-4.1", "gpt-5.2"]
+}
+```
+
+**Result:** Transcription requests will fail with `403 Forbidden` and `model_not_allowed` error.
+
+**Valid Configuration:**
+```json
+{
+  "allowed_models": ["gpt-4.1", "gpt-4o-transcribe"]
+}
+```
+
+**Result:** Transcription requests will succeed.
+
+Check your available models at `/v1/models` (note: `gpt-4o-transcribe` may not appear in the models list but is still accessible if allowed).
+
+## Rate Limiting
+
+Transcription requests count toward your API key's rate limits using the effective model `gpt-4o-transcribe`.
+
+**Rate limit headers:**
+```
+X-RateLimit-Limit-Requests: 100
+X-RateLimit-Remaining-Requests: 95
+X-RateLimit-Reset-Requests: 2026-03-03T15:00:00Z
+```
+
+Each transcription request consumes one request from your quota, regardless of audio file size or duration.
+
+**Note:** Transcription responses do not provide token usage, so token-based limits are not applied.
+
+## Best Practices
+
+### Audio Quality
+
+- **Clear audio**: Higher quality audio produces better transcriptions
+- **Minimal background noise**: Reduce noise for improved accuracy
+- **Appropriate volume**: Ensure audio is not too quiet or distorted
+
+### Prompt Usage
+
+- **Provide context**: Help the model understand domain-specific terminology
+- **Specify names**: Include proper nouns that may be uncommon
+- **Set style**: Indicate formal vs. casual transcription style
+
+Example prompts:
+```
+"This is a medical consultation discussing patient symptoms."
+"Technical presentation about Kubernetes and Docker containers."
+"Podcast interview with Dr. Jane Smith about climate science."
+```
+
+### Error Handling
+
+```javascript
+try {
+  const response = await fetch(url, { method: 'POST', headers, body: formData });
+  
+  if (!response.ok) {
+    const error = await response.json();
+    if (error.error.code === 'model_not_allowed') {
+      console.error('API key lacks access to transcription');
+    } else if (error.error.code === 'rate_limit_exceeded') {
+      console.error('Rate limit hit, retry after:', error.error.resets_at);
+    } else {
+      console.error('Transcription failed:', error.error.message);
+    }
+    return;
+  }
+  
+  const result = await response.json();
+  console.log('Transcription:', result.text);
+} catch (err) {
+  console.error('Network error:', err);
+}
+```
+
+## Comparison with OpenAI
+
+This endpoint follows the OpenAI `/v1/audio/transcriptions` format with these specifics:
+
+**Similarities:**
+- Multipart form data format
+- Required `file` and `model` parameters
+- Optional `prompt` parameter
+- JSON response with `text` field
+- OpenAI-compatible error envelopes
+
+**Differences:**
+- **Model restriction**: Only `gpt-4o-transcribe` is supported (OpenAI supports `whisper-1` and variants)
+- **Account routing**: Uses model-agnostic account selection for reliability
+- **Rate limiting**: Counts as request limit (not token limit)
+- **No streaming**: Transcription is always non-streaming
+
+## Related Endpoints
+
+- **Backend Transcription**: `/backend-api/transcribe` (internal format, no model parameter required)
+- **Chat Completions**: `/v1/chat/completions` (text generation with chat format)
+- **Responses**: `/v1/responses` (text generation with responses format)

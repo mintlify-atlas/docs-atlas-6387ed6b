@@ -1,0 +1,322 @@
+---
+title: Authentication
+description: API key authentication using Bearer tokens in Codex-LB
+---
+
+## Overview
+
+Codex-LB uses API key authentication for most endpoints. Authentication can be enabled or disabled globally, and when enabled, all proxy endpoints require a valid API key in the Authorization header.
+
+## Authentication Configuration
+
+Authentication is controlled by the `api_key_auth_enabled` setting in the database. When authentication is disabled, all API endpoints are accessible without an API key.
+
+```python
+# From app/core/auth/dependencies.py:40-41
+if not settings.api_key_auth_enabled:
+    return None
+```
+
+## API Key Format
+
+API keys follow the format:
+
+```
+sk-clb-{random_token}
+```
+
+Where:
+- `sk-clb-` is a fixed prefix identifying Codex-LB keys
+- `{random_token}` is a 32-byte URL-safe base64-encoded random value
+
+Example:
+```
+sk-clb-AbCdEfGhIjKlMnOpQrStUvWxYz0123456789_-
+```
+
+## Authentication Method
+
+Codex-LB uses HTTP Bearer token authentication. Include your API key in the `Authorization` header:
+
+```bash
+Authorization: Bearer sk-clb-your-api-key-here
+```
+
+### Example Request
+
+```bash
+curl -X POST https://your-codex-lb-instance.com/v1/chat/completions \
+  -H "Authorization: Bearer sk-clb-your-api-key-here" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "gpt-4",
+    "messages": [{"role": "user", "content": "Hello!"}]
+  }'
+```
+
+## When API Keys Are Required
+
+API keys are required for these endpoint groups:
+
+### OpenAI-Compatible Endpoints (v1 Router)
+
+All endpoints under `/v1` require authentication when enabled:
+
+- `POST /v1/chat/completions`
+- `POST /v1/responses`
+- `POST /v1/responses/compact`
+- `GET /v1/models`
+- `POST /v1/audio/transcriptions`
+
+**Security dependency**: `Security(validate_proxy_api_key)` (app/modules/proxy/api.py:58-62)
+
+### Codex Backend Endpoints
+
+All endpoints under `/backend-api/codex` require authentication when enabled:
+
+- `POST /backend-api/codex/responses`
+- `POST /backend-api/codex/responses/compact`
+- `GET /backend-api/codex/models`
+- `POST /backend-api/transcribe`
+
+**Security dependency**: `Security(validate_proxy_api_key)` (app/modules/proxy/api.py:53-57, 67-71)
+
+## When API Keys Are Optional
+
+When `api_key_auth_enabled` is set to `false`, API keys are not required. The `validate_proxy_api_key` function returns `None` and the request proceeds without authentication checks (app/core/auth/dependencies.py:36-41).
+
+## Alternative Authentication (Usage Endpoint)
+
+The `/api/codex/usage` endpoint uses a different authentication mechanism:
+
+### ChatGPT Token + Account ID
+
+This endpoint requires:
+
+1. **Authorization header** with ChatGPT Bearer token:
+   ```
+   Authorization: Bearer {chatgpt_access_token}
+   ```
+
+2. **chatgpt-account-id header** with the account ID:
+   ```
+   chatgpt-account-id: {account_id}
+   ```
+
+**Security dependency**: `Depends(validate_codex_usage_identity)` (app/modules/proxy/api.py:63-66)
+
+Validation process (app/core/auth/dependencies.py:83-108):
+1. Extract Bearer token from Authorization header
+2. Extract account ID from `chatgpt-account-id` header
+3. Verify the account ID exists and is active in the database
+4. Validate credentials by fetching usage from OpenAI's API
+
+### Example Usage Request
+
+```bash
+curl https://your-codex-lb-instance.com/api/codex/usage \
+  -H "Authorization: Bearer {chatgpt_token}" \
+  -H "chatgpt-account-id: {account_id}"
+```
+
+## API Key Validation
+
+When a request includes an API key, the following validation occurs (app/core/auth/dependencies.py:36-52):
+
+### 1. Key Format Validation
+
+The API key must be present in the Authorization header:
+```
+Authorization: Bearer sk-clb-...
+```
+
+### 2. Key Hash Lookup
+
+The key is hashed using SHA-256 and looked up in the database:
+
+```python
+# From app/modules/api_keys/service.py:512
+def _hash_key(plain_key: str) -> str:
+    return sha256(plain_key.encode("utf-8")).hexdigest()
+```
+
+### 3. Active Status Check
+
+The API key must have `is_active = true`:
+
+```python
+# From app/modules/api_keys/service.py:545-547
+if row is None or not row.is_active:
+    raise ApiKeyInvalidError("Invalid API key")
+```
+
+### 4. Expiration Check
+
+If the key has an expiration date, it must not have passed:
+
+```python
+# From app/modules/api_keys/service.py:306-307
+if row.expires_at is not None and row.expires_at < now:
+    raise ApiKeyInvalidError("API key has expired")
+```
+
+### 5. Model Access Validation
+
+If the API key has an `allowed_models` restriction, the requested model must be in the list:
+
+```python
+# From app/modules/proxy/api.py:554-562
+def _validate_model_access(api_key: ApiKeyData | None, model: str | None) -> None:
+    if api_key is None:
+        return
+    allowed_models = api_key.allowed_models
+    if not allowed_models:
+        return
+    if model is None or model in allowed_models:
+        return
+    raise ProxyModelNotAllowed(
+        f"This API key does not have access to model '{model}'"
+    )
+```
+
+## Rate Limit Enforcement
+
+After authentication, rate limits are enforced for each request (app/modules/proxy/api.py:524-543):
+
+### Limit Types
+
+1. **Requests** - Maximum number of requests per time window
+2. **Total Tokens** - Combined input + output tokens
+3. **Input Tokens** - Maximum input tokens
+4. **Output Tokens** - Maximum output tokens
+5. **Cost USD** - Maximum spend in microdollars (1 USD = 1,000,000 microdollars)
+
+### Time Windows
+
+- **Daily** - Resets every 24 hours
+- **Weekly** - Resets every 7 days
+- **Monthly** - Resets every 30 days
+
+### Model-Specific Limits
+
+Limits can be scoped to specific models using the `model_filter` field. A limit applies to a request if:
+
+```python
+# From app/modules/api_keys/service.py:576-581
+def _limit_applies_for_request(limit: ApiKeyLimit, *, request_model: str | None) -> bool:
+    if limit.model_filter is None:
+        return True  # Global limit
+    if request_model is None:
+        return False
+    return limit.model_filter == request_model
+```
+
+### Usage Reservation
+
+Each request reserves quota upfront (app/modules/api_keys/service.py:329-371):
+
+1. Check each applicable limit
+2. Reserve a portion of the remaining quota
+3. Create a usage reservation ID
+4. After response, finalize with actual token counts
+5. Adjust the reserved amount to match actual usage
+
+Reservation budgets (app/modules/api_keys/service.py:592-601):
+- **Tokens**: 8,192 tokens per request
+- **Cost**: 2,000,000 microdollars ($2.00) per request
+- **Requests**: 1 request
+
+## Authentication Errors
+
+Authentication failures return a 401 status code with an OpenAI-formatted error:
+
+### Missing API Key
+
+```json
+{
+  "error": {
+    "message": "Missing API key in Authorization header",
+    "type": "authentication_error",
+    "code": "invalid_api_key"
+  }
+}
+```
+
+### Invalid API Key
+
+```json
+{
+  "error": {
+    "message": "Invalid API key",
+    "type": "authentication_error",
+    "code": "invalid_api_key"
+  }
+}
+```
+
+### Expired API Key
+
+```json
+{
+  "error": {
+    "message": "API key has expired",
+    "type": "authentication_error",
+    "code": "invalid_api_key"
+  }
+}
+```
+
+### Model Not Allowed
+
+**Status Code**: 403
+
+```json
+{
+  "error": {
+    "message": "This API key does not have access to model 'gpt-4'",
+    "type": "permission_error",
+    "code": "model_not_allowed"
+  }
+}
+```
+
+### Rate Limit Exceeded
+
+**Status Code**: 429
+
+```json
+{
+  "error": {
+    "message": "API key requests daily limit exceeded. Usage resets at 2026-03-04T12:00:00Z.",
+    "type": "rate_limit_error",
+    "code": "rate_limit_exceeded"
+  }
+}
+```
+
+The error message includes the reset timestamp in ISO 8601 format (app/modules/proxy/api.py:540).
+
+## Security Best Practices
+
+### Key Storage
+
+- API keys are stored as SHA-256 hashes in the database
+- Only the key prefix (first 15 characters) is stored in plaintext for identification
+- The full plaintext key is only returned once when the key is created or regenerated
+
+### Key Rotation
+
+API keys can be regenerated via the management API:
+- Generates a new random token
+- Updates the hash and prefix
+- Preserves all other key attributes (limits, allowed models, etc.)
+
+### Last Used Tracking
+
+The `last_used_at` timestamp is updated each time a key successfully completes a request, allowing administrators to identify unused keys.
+
+## Next Steps
+
+- [Managing API Keys](/guides/managing-api-keys) - Learn how to create and manage API keys
+- [Rate Limiting](/guides/rate-limiting) - Configure rate limits for API keys
+- [Error Handling](/api/error-handling) - Handle authentication errors properly
